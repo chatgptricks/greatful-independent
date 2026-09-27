@@ -1,6 +1,6 @@
 import { after } from "next/server";
 import { resolveGFAccess } from "@/lib/grateful-future/member";
-import { isAnthropicConfigured } from "@/lib/anthropic";
+import { isOpenAIConfigured } from "@/lib/openai";
 import {
   payloadToStory,
   runResearchEngine,
@@ -32,9 +32,9 @@ export async function POST(request: Request) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
   const owner = access.ownerKey;
-  if (!isAnthropicConfigured()) {
+  if (!isOpenAIConfigured()) {
     return Response.json(
-      { error: "Research is not configured (ANTHROPIC_API_KEY missing)." },
+      { error: "Research is not configured (OPENAI_API_KEY missing)." },
       { status: 503 },
     );
   }

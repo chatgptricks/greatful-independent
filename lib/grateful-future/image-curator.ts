@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { getAnthropic } from "@/lib/anthropic";
+import { getOpenAI, VISION_MODEL } from "@/lib/openai";
 import type { StoryImage } from "./types";
 
 /**
@@ -17,7 +17,6 @@ import type { StoryImage } from "./types";
  */
 
 /** High-volume, low-difficulty vision task — Haiku is built for this. */
-const CURATOR_MODEL = "claude-haiku-4-5-20251001";
 
 /** Images per vision request. */
 const BATCH_SIZE = 10;
@@ -42,9 +41,11 @@ interface Review {
 }
 
 const REVIEW_TOOL = {
+  type: "function" as const,
   name: "submit_image_reviews",
   description: "Submit your review of every numbered image.",
-  input_schema: {
+  strict: false,
+  parameters: {
     type: "object" as const,
     properties: {
       reviews: {
@@ -159,7 +160,7 @@ export async function curateImages(
   images: StoryImage[],
   ctx: CurationContext,
 ): Promise<StoryImage[]> {
-  const client = getAnthropic();
+  const client = getOpenAI();
   if (!client || images.length === 0) return images;
 
   const started = Date.now();
@@ -190,54 +191,43 @@ export async function curateImages(
       if (remaining < 12_000) return;
       try {
         const content: Array<
-          | { type: "text"; text: string }
-          | {
-              type: "image";
-              source: { type: "base64"; media_type: "image/jpeg"; data: string };
-            }
+          | { type: "input_text"; text: string }
+          | { type: "input_image"; image_url: string; detail: "low" }
         > = [];
-        batch.forEach(({ img }, i) => {
+        batch.forEach(({ img, thumb }, i) => {
           const hint = [
             img.source === "x" ? "from X" : `from ${img.directive || "the web"}`,
             img.description
               ? `published caption/alt: ${img.description.slice(0, 220)}`
               : "",
-          ]
-            .filter(Boolean)
-            .join(" · ");
-          content.push({ type: "text", text: `IMAGE ${i + 1} (${hint})` });
+          ].filter(Boolean).join(" · ");
+          content.push({ type: "input_text", text: `IMAGE ${i + 1} (${hint})` });
           content.push({
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/jpeg",
-              data: batch[i].thumb,
-            },
+            type: "input_image",
+            image_url: `data:image/jpeg;base64,${thumb}`,
+            detail: "low",
           });
         });
-        content.push({
-          type: "text",
-          text: `Review all ${batch.length} images now.`,
-        });
+        content.push({ type: "input_text", text: `Review all ${batch.length} images now.` });
 
-        const msg = await client.messages.create(
+        const response = await client.responses.create(
           {
-            model: CURATOR_MODEL,
-            max_tokens: 2_000,
-            system,
-            messages: [{ role: "user", content }],
+            model: VISION_MODEL,
+            instructions: system,
+            input: [{ role: "user", content }],
             tools: [REVIEW_TOOL],
-            tool_choice: { type: "tool", name: "submit_image_reviews" },
+            tool_choice: { type: "function", name: "submit_image_reviews" },
+            max_output_tokens: 2_000,
+            store: false,
           },
           { signal: AbortSignal.timeout(Math.min(remaining - 2_000, 60_000)) },
         );
-        const call = msg.content.find(
-          (b) => b.type === "tool_use" && b.name === "submit_image_reviews",
+        const call = response.output.find(
+          (item) => item.type === "function_call" && item.name === "submit_image_reviews",
         );
-        const reviews =
-          call && call.type === "tool_use"
-            ? (call.input as { reviews?: Review[] } | undefined)?.reviews
-            : undefined;
+        const reviews = call?.type === "function_call"
+          ? (JSON.parse(call.arguments) as { reviews?: Review[] }).reviews
+          : undefined;
         if (!Array.isArray(reviews)) return;
         for (const r of reviews) {
           const item = batch[Number(r.index) - 1];

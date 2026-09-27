@@ -1,6 +1,5 @@
 import { after } from "next/server";
-import type Anthropic from "@anthropic-ai/sdk";
-import { ASSISTANT_MODEL, getAnthropic } from "@/lib/anthropic";
+import { CHAT_MODEL, getOpenAI } from "@/lib/openai";
 import { resolveGFAccess } from "@/lib/grateful-future/member";
 import {
   buildChatSystem,
@@ -46,11 +45,9 @@ interface ChatRequest {
   researchSystemPrompt?: string;
 }
 
-const CHAT_TOOLS: Anthropic.Messages.ToolUnion[] = [
+const CHAT_TOOLS = [
   {
-    type: "web_search_20260209",
-    name: "web_search",
-    max_uses: 5,
+    type: "web_search" as const,
   },
   {
     name: "update_caption",
@@ -146,10 +143,10 @@ export async function POST(request: Request) {
   }
   const owner = access.ownerKey;
 
-  const client = getAnthropic();
+  const client = getOpenAI();
   if (!client) {
     return Response.json(
-      { error: "The chat needs ANTHROPIC_API_KEY." },
+      { error: "The chat needs OPENAI_API_KEY." },
       { status: 503 },
     );
   }
@@ -162,10 +159,19 @@ export async function POST(request: Request) {
 
   const today = new Date().toISOString().slice(0, 10);
   const system = buildChatSystem(story, today);
-  const conversation: Anthropic.Messages.MessageParam[] = messages.map((m) => ({
+  const conversation = messages.map((m) => ({
     role: m.role,
     content: m.content || " ",
   }));
+  const tools = CHAT_TOOLS.map((tool) => tool.type === "web_search"
+    ? { type: "web_search" as const }
+    : {
+        type: "function" as const,
+        name: tool.name!,
+        description: tool.description!,
+        parameters: tool.input_schema!,
+        strict: false,
+      });
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -175,69 +181,49 @@ export async function POST(request: Request) {
       };
 
       try {
-        let containerId: string | null = null;
+        let previousResponseId: string | undefined;
+        let nextInput: typeof conversation | Array<{
+          type: "function_call_output";
+          call_id: string;
+          output: string;
+        }> = conversation;
         for (let turn = 0; turn < 6; turn++) {
-          const params: Anthropic.Messages.MessageStreamParams = {
-            model: ASSISTANT_MODEL,
-            max_tokens: 1600,
-            thinking: { type: "adaptive" },
-            output_config: { effort: "medium" },
-            system,
-            tools: CHAT_TOOLS,
-            messages: conversation,
-          };
-          if (containerId) params.container = containerId;
-
-          const responseStream = client.messages.stream(params);
-          responseStream.on("text", (delta) => {
-            // The voice forbids em dashes; substitute commas defensively
-            // (swallow surrounding spaces so "x — y" becomes "x, y").
-            send({
-              type: "text",
-              delta: delta.replace(/\s*[—–]\s*/g, ", "),
-            });
+          const responseStream = await client.responses.create({
+            model: CHAT_MODEL,
+            instructions: system,
+            input: nextInput,
+            previous_response_id: previousResponseId,
+            tools,
+            stream: true,
+            store: true,
+            max_output_tokens: 3_000,
           });
-          responseStream.on("contentBlock", (block) => {
-            if (block.type === "server_tool_use" && block.name === "web_search") {
-              send({
-                type: "search",
-                query: (block.input as { query?: string })?.query ?? "",
-              });
+          let responseId: string | undefined;
+          let calls: Array<{ type: "function_call"; name: string; arguments: string; call_id: string }> = [];
+          for await (const event of responseStream) {
+            if (event.type === "response.output_text.delta") {
+              send({ type: "text", delta: event.delta.replace(/\s*[—–]\s*/g, ", ") });
             }
-          });
-
-          const msg = await responseStream.finalMessage();
-          if (msg.container?.id) containerId = msg.container.id;
-
-          if (msg.stop_reason === "pause_turn") {
-            conversation.push({ role: "assistant", content: msg.content });
-            continue;
+            if (event.type === "response.completed") {
+              responseId = event.response.id;
+              calls = event.response.output.filter(
+                (item): item is typeof calls[number] => item.type === "function_call",
+              );
+            }
           }
-
-          if (msg.stop_reason === "tool_use") {
-            conversation.push({ role: "assistant", content: msg.content });
-            const calls = msg.content.filter(
-              (b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use",
-            );
-            if (calls.length === 0) {
-              send({ type: "done" });
-              break;
-            }
-            const results: Anthropic.Messages.ToolResultBlockParam[] = [];
-            for (const call of calls) {
-              results.push({
-                type: "tool_result",
-                tool_use_id: call.id,
-                content: await runChatTool(call, story, owner, body, send),
-              });
-            }
-            conversation.push({ role: "user", content: results });
-            continue;
+          if (!responseId) throw new Error("Chat response ended before completion.");
+          previousResponseId = responseId;
+          if (calls.length === 0) {
+            send({ type: "done" });
+            break;
           }
-
-          // end_turn, refusal, anything else: finish cleanly.
-          send({ type: "done" });
-          break;
+          const outputs: Array<{ type: "function_call_output"; call_id: string; output: string }> = [];
+          for (const call of calls) {
+            const output = await runChatTool(call, story, owner, body, send);
+            outputs.push({ type: "function_call_output", call_id: call.call_id, output });
+          }
+          nextInput = outputs;
+          if (turn === 5) send({ type: "done" });
         }
       } catch (err) {
         send({
@@ -261,13 +247,13 @@ export async function POST(request: Request) {
 }
 
 async function runChatTool(
-  call: Anthropic.Messages.ToolUseBlock,
+  call: { name: string; arguments: string },
   story: ChatStoryContext,
   owner: string,
   body: ChatRequest,
   send: (data: Record<string, unknown>) => void,
 ): Promise<string> {
-  const input = call.input as Record<string, unknown>;
+  const input = JSON.parse(call.arguments || "{}") as Record<string, unknown>;
 
   if (call.name === "update_caption") {
     const caption = String(input.caption ?? "").trim();

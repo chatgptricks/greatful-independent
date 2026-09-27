@@ -1,5 +1,5 @@
 import { resolveGFAccess } from "@/lib/grateful-future/member";
-import { isAnthropicConfigured } from "@/lib/anthropic";
+import { isOpenAIConfigured } from "@/lib/openai";
 import { runResearchEngine } from "@/lib/grateful-future/research-engine";
 
 export const runtime = "nodejs";
@@ -16,7 +16,7 @@ export const maxDuration = 800;
  */
 export async function POST(request: Request) {
   // Owner or paying member only. The tool UI is gated, but this endpoint runs
-  // paid Claude + web-search calls, so lock it too. (The legacy x-gf-cron
+  // paid OpenAI + web-search calls, so lock it too. (The legacy x-gf-cron
   // header bypass remains for any older deploy still HTTP-hopping.)
   const cronSecret = process.env.CRON_SECRET;
   const isInternalCron =
@@ -28,9 +28,9 @@ export async function POST(request: Request) {
     }
   }
 
-  if (!isAnthropicConfigured()) {
+  if (!isOpenAIConfigured()) {
     return Response.json(
-      { error: "Research is not configured (ANTHROPIC_API_KEY missing)." },
+      { error: "Research is not configured (OPENAI_API_KEY missing)." },
       { status: 503 },
     );
   }

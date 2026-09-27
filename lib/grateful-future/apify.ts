@@ -2,7 +2,7 @@ import type { StoryImage } from "./types";
 
 /**
  * Server-only Apify helpers. X/Twitter is the one source we use Apify for:
- * Claude's research already covers the open web, and Pinterest skews toward AI
+ * The research engine already covers the open web, and Pinterest skews toward AI
  * images. X is where the real screenshots and memes live.
  *
  * Needs APIFY_TOKEN. Returns [] (best-effort) when unset or on any failure.

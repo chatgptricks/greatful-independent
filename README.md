@@ -4,19 +4,19 @@ This repository is an independent copy with its own Git history. Configure new s
 
 A studio for finding stories worth telling and turning them into Instagram carousels.
 
-- **Research:** pick a vein (Tradition, Mind, Object, Frontier, Culture, Tech, Pulse, Craft) and Claude browses the live web, filters hard, and returns a researched story with sources, a caption draft and an image pool.
+- **Research:** pick a vein (Tradition, Mind, Object, Frontier, Culture, Tech, Pulse, Craft) and OpenAI searches the live web, filters hard, and returns a researched story with sources, a caption draft and an image pool.
 - **Create:** edit the slides (templates, fonts, image layout), preview them exactly as Instagram will show them, and export images or video.
 - **Schedule (optional):** let research run on its own every few hours and queue stories for review.
 
-Built with Next.js 16, React 19, Tailwind v4 and the Claude API.
+Built with Next.js 16, React 19, Tailwind v4 and the OpenAI API.
 
 ## Run it locally
 
-You need Node 22 with npm and an Anthropic API key.
+You need Node 22 with npm and an OpenAI API key.
 
 ```sh
 npm ci
-cp .env.example .env.local   # then paste your ANTHROPIC_API_KEY
+cp .env.example .env.local   # then paste your OPENAI_API_KEY
 npm run dev
 ```
 
@@ -28,7 +28,7 @@ Open http://localhost:3000. With no Supabase settings the studio opens with no s
 |---|---|
 | The studio page and its styles | `app/admin/(tool)/grateful-future/` |
 | Studio UI (grid, story detail, slide editor, Instagram preview, research menu) | `components/grateful-future/` |
-| Research engine and prompts | `lib/grateful-future/research-engine.ts`, `profile.ts`, `post-types.ts` |
+| Research engine and prompts | `lib/grateful-future/research-engine.ts`, `profile.ts`, `post-types.ts`, `lib/openai.ts` |
 | Image sourcing | `lib/grateful-future/image-curator.ts`, `apify.ts` |
 | Video export | `lib/grateful-future/export-video.ts` |
 | API routes | `app/api/grateful-future/` |
@@ -48,13 +48,13 @@ Create a Render **Web Service** from `chatgptricks/greatful-independent`, branch
 | `SUPABASE_SERVICE_ROLE_KEY` | Service-role key of the new project (secret) |
 | `OWNER_EMAIL` | `esteban@sentientagency.io` |
 | `NEXT_PUBLIC_SITE_URL` | The new Render URL, such as `https://greatful-independent.onrender.com` |
-| `ANTHROPIC_API_KEY` | A separate key for research and chat (secret) |
+| `OPENAI_API_KEY` | A separate OpenAI API key for research, chat, and image review (secret) |
 
 The deployed studio requires Supabase Auth; it does not open publicly if these settings are missing. Subscription access is disabled unless explicitly enabled later. Render's Free web service sleeps when idle, and its local filesystem is temporary, so the new Supabase project stores stories and designs. `vercel.json` is only for Vercel; Render does not run its cron schedule. Set up a separate Render cron job later if scheduled research is needed.
 
 ## Optional features
 
-Additional integrations switch on when their keys are configured (see `.env.example`).
+Research uses `gpt-5.4` by default; chat and image review use `gpt-5.4-mini`. Override them with `OPENAI_RESEARCH_MODEL`, `OPENAI_CHAT_MODEL`, and `OPENAI_VISION_MODEL` if your API project has access to other compatible models. Additional integrations switch on when their keys are configured (see `.env.example`).
 
 - **Sign-in and a cloud story store (Supabase).** Sign-in uses a one-time link emailed to the owner. The owner allowlist is set by `OWNER_EMAIL`.
 - **Scheduled research.** Needs Supabase plus `CRON_SECRET` and an external scheduler. On Vercel, `vercel.json` runs the cron hourly; Render requires its own cron job.

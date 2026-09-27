@@ -1,5 +1,5 @@
-import type Anthropic from "@anthropic-ai/sdk";
-import { ASSISTANT_MODEL, getAnthropic } from "@/lib/anthropic";
+import { RESEARCH_MODEL, getOpenAI } from "@/lib/openai";
+import type { Response as OpenAIResponse } from "openai/resources/responses/responses";
 import { searchXImages } from "./apify";
 import { curateImages } from "./image-curator";
 import { POST_TYPE_IDS, postType } from "./post-types";
@@ -16,7 +16,7 @@ import type {
 /**
  * Grateful Future — the research engine, as a plain server-side function.
  *
- * Runs the finder system prompt against Claude with live web search, forces a
+ * Runs the finder system prompt against OpenAI with live web search, forces a
  * structured result via the `submit_story` tool, scrapes a real-image pool from
  * the verified pages, and returns the mapped payload. Both API routes call this
  * directly (the interactive `research`/`research-start` routes and the cron),
@@ -44,11 +44,13 @@ const sourceLink = {
   required: ["name", "url"],
 };
 
-const SUBMIT_TOOL: Anthropic.Messages.Tool = {
+const SUBMIT_TOOL = {
+  type: "function" as const,
   name: "submit_story",
   description:
     "Return the finished research result as structured data. Call this exactly once, at the very end, AFTER doing the live web research. Every hard fact in the caption must trace to a source in the dossier.",
-  input_schema: {
+  strict: false,
+  parameters: {
     type: "object",
     properties: {
       title: { type: "string", description: "One-line working title." },
@@ -192,11 +194,7 @@ const SUBMIT_TOOL: Anthropic.Messages.Tool = {
   },
 };
 
-const WEB_SEARCH: Anthropic.Messages.ToolUnion = {
-  type: "web_search_20260209",
-  name: "web_search",
-  max_uses: 8,
-};
+const WEB_SEARCH = { type: "web_search" as const };
 
 const FALLBACK_SYSTEM =
   "You are the editorial engine behind Grateful Future. Research the requested story by browsing the live web, verify every fact against real sources you actually read, then draft a calm declarative caption and a pool of real-image search directives.";
@@ -473,7 +471,7 @@ export async function imagesFromPage(
 
 /**
  * Build the image pool. Primary path (no extra keys): harvest real images from
- * the pages Claude verified/recommended. Then Google CSE for `google`
+ * the pages OpenAI verified/recommended. Then Google CSE for `google`
  * directives if those keys exist, then placeholder tiles so the gallery is
  * never empty.
  */
@@ -485,7 +483,7 @@ async function buildImagePool(opts: {
   const out: StoryImage[] = [];
   const seen = new Set<string>();
 
-  // 1) Scrape Claude's image-source pages + verified-source pages.
+  // 1) Scrape the model's image-source pages + verified-source pages.
   const pages = pageUrls.slice(0, 14);
   const scraped = await Promise.all(
     pages.map((p) =>
@@ -571,13 +569,13 @@ export interface ResearchEngineInput {
   deadlineMs?: number;
 }
 
-/** Run one full research: Claude + web search → submit_story → image pool. */
+/** Run one full research: OpenAI + web search → submit_story → image pool. */
 export async function runResearchEngine(
   input: ResearchEngineInput,
 ): Promise<ResearchStoryPayload> {
-  const client = getAnthropic();
+  const client = getOpenAI();
   if (!client) {
-    throw new Error("Research is not configured (ANTHROPIC_API_KEY missing).");
+    throw new Error("Research is not configured (OPENAI_API_KEY missing).");
   }
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error("No prompt.");
@@ -601,15 +599,9 @@ export async function runResearchEngine(
       ? `\n\nReference files the curator attached (names only): ${attachments.join(", ")}`
       : "");
 
-  const conversation: Anthropic.Messages.MessageParam[] = [
-    { role: "user", content: userText },
-  ];
-
-  let containerId: string | null = null;
   let result: Record<string, unknown> | null = null;
-  let nudgedEnd = false;
-  let nudgedMax = false;
-  let rejectedSubmit = false;
+  let previousResponseId: string | undefined;
+  let nextInput: string | Array<{ type: "function_call_output"; call_id: string; output: string }> = userText;
   const trace: string[] = [];
   const startedAt = Date.now();
   const deadlineMs = input.deadlineMs ?? ENGINE_DEADLINE_MS;
@@ -619,119 +611,45 @@ export async function runResearchEngine(
   for (let turn = 0; turn < MAX_TURNS && !result; turn++) {
     const remaining = deadlineMs - (Date.now() - startedAt);
     if (remaining < 15_000) throw tooLong();
-    const params: Anthropic.Messages.MessageCreateParams = {
-      model: ASSISTANT_MODEL,
-      max_tokens: MAX_TOKENS,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "high" },
-      system,
-      tools: [WEB_SEARCH, SUBMIT_TOOL],
-      messages: conversation,
-    };
-    if (containerId) params.container = containerId;
-
-    // Stream instead of a single long request: web-search-heavy runs can sit
-    // for many minutes, and non-streaming calls hit the SDK's request
-    // timeout ("Request timed out."). finalMessage() returns the same shape.
-    // The abort signal is the HARD bound — a single turn can't outlive the
-    // remaining budget, so the run always ends in time to record its outcome.
-    let msg: Anthropic.Messages.Message;
-    try {
-      msg = await client.messages
-        .stream(params, { signal: AbortSignal.timeout(remaining) })
-        .finalMessage();
-    } catch (err) {
-      if (
-        (err instanceof DOMException && err.name === "TimeoutError") ||
-        (err instanceof Error && /abort/i.test(err.name + err.message))
-      ) {
-        throw tooLong();
-      }
-      throw err;
-    }
-    if (msg.container?.id) containerId = msg.container.id;
-    trace.push(msg.stop_reason ?? "?");
-
-    if (msg.stop_reason === "pause_turn") {
-      conversation.push({ role: "assistant", content: msg.content });
-      continue;
-    }
-
-    if (msg.stop_reason === "tool_use") {
-      const submit = msg.content.find(
-        (b): b is Anthropic.Messages.ToolUseBlock =>
-          b.type === "tool_use" && b.name === "submit_story",
-      );
-      if (submit) {
-        const input = submit.input as Record<string, unknown>;
-        // Guard against an empty/truncated submit call (it would otherwise
-        // store an "Untitled" husk): bounce it back once as a tool error.
-        const complete =
-          typeof input.title === "string" &&
-          input.title.trim() !== "" &&
-          typeof input.caption === "string" &&
-          input.caption.trim() !== "";
-        if (complete) {
-          result = input;
+    const response: OpenAIResponse = await client.responses.create(
+      {
+        model: RESEARCH_MODEL,
+        instructions: system,
+        input: nextInput,
+        previous_response_id: previousResponseId,
+        tools: [WEB_SEARCH, SUBMIT_TOOL],
+        max_output_tokens: MAX_TOKENS,
+        store: true,
+      },
+      { signal: AbortSignal.timeout(remaining) },
+    );
+    previousResponseId = response.id;
+    trace.push(response.status ?? "unknown");
+    const submit = response.output.find(
+      (item) => item.type === "function_call" && item.name === "submit_story",
+    );
+    if (submit?.type === "function_call") {
+      try {
+        const candidate = JSON.parse(submit.arguments) as Record<string, unknown>;
+        if (
+          typeof candidate.title === "string" && candidate.title.trim() &&
+          typeof candidate.caption === "string" && candidate.caption.trim() &&
+          candidate.dossier && Array.isArray(candidate.imageDirectives)
+        ) {
+          result = candidate;
           break;
         }
-        if (rejectedSubmit) break;
-        rejectedSubmit = true;
-        conversation.push({ role: "assistant", content: msg.content });
-        conversation.push({
-          role: "user",
-          content: [
-            {
-              type: "tool_result" as const,
-              tool_use_id: submit.id,
-              is_error: true,
-              content:
-                "submit_story was called with incomplete input. Call submit_story again with the FULL structured result — title, description, postType, alignment, verdict, dossier, caption (90–140 words), imageDirectives, imageSourceUrls — every required field populated.",
-            },
-          ],
-        });
-        continue;
-      }
-      // Only server tools (web_search) — append and let it continue.
-      conversation.push({ role: "assistant", content: msg.content });
+      } catch { /* ask the model to repair malformed arguments */ }
+      nextInput = [{
+        type: "function_call_output",
+        call_id: submit.call_id,
+        output: "Incomplete story. Call submit_story again with a title, caption, dossier, imageDirectives, and all required fields.",
+      }];
       continue;
     }
-
-    if (msg.stop_reason === "end_turn") {
-      if (nudgedEnd) break;
-      nudgedEnd = true;
-      conversation.push({ role: "assistant", content: msg.content });
-      conversation.push({
-        role: "user",
-        content:
-          "Now call submit_story with the structured result from your research.",
-      });
-      continue;
-    }
-
-    if (msg.stop_reason === "max_tokens") {
-      // The output budget ran out (usually mid tool call). Drop any truncated
-      // tool_use block, keep the prose, and ask once for a tighter submit.
-      if (nudgedMax) break;
-      nudgedMax = true;
-      const keep = msg.content.filter((b) => b.type !== "tool_use");
-      conversation.push({
-        role: "assistant",
-        content: keep.length
-          ? keep
-          : [{ type: "text" as const, text: "(ran out of output room)" }],
-      });
-      conversation.push({
-        role: "user",
-        content:
-          "You hit the output limit. Call submit_story now with the structured result — keep every field tight (shorter notes, fewer directives if needed).",
-      });
-      continue;
-    }
-
-    // Any other stop reason: stop.
-    conversation.push({ role: "assistant", content: msg.content });
-    break;
+    nextInput = response.status === "incomplete"
+      ? "You hit the output limit. Call submit_story now with a concise complete result."
+      : "Call submit_story now with the completed, source-verified story. Do not answer in plain text.";
   }
 
   if (!result) {
@@ -778,7 +696,7 @@ export async function runResearchEngine(
   };
 
   const titleOver = (r.titleOverImage ?? {}) as Record<string, unknown>;
-  // Pages to harvest real images from: Claude's recommended image-rich pages
+  // Pages to harvest real images from: the model's recommended image-rich pages
   // plus every verified-source URL in the dossier.
   const dossierUrls = [
     ...dossier.primarySources.map((s) => s.url),

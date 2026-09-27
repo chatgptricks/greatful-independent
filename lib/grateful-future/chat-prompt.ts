@@ -1,4 +1,3 @@
-import type Anthropic from "@anthropic-ai/sdk";
 
 /**
  * System prompt for the story chat — the chat that lives beside a story's
@@ -62,7 +61,7 @@ Operating style: conversational and brief (2 to 5 sentences unless drafting). Ac
 export function buildChatSystem(
   story: ChatStoryContext,
   today: string,
-): Anthropic.Messages.MessageCreateParams["system"] {
+): string {
   const facts = (story.dossier?.verifiedFacts ?? [])
     .map(
       (f, i) =>
@@ -109,12 +108,5 @@ ${sources ? `\nPRIMARY SOURCES:\n${sources}` : ""}
 IMAGE POOL (${story.images?.length ?? 0} images, ${selected.size} selected for the carousel):
 ${images || "(empty)"}`;
 
-  return [
-    {
-      type: "text",
-      text: PERSONA,
-      cache_control: { type: "ephemeral" },
-    },
-    { type: "text", text: context },
-  ];
+  return `${PERSONA}\n\n${context}`;
 }

@@ -1,5 +1,5 @@
 import { getCurrentAdminUser } from "@/lib/supabase/auth-server";
-import { isAnthropicConfigured } from "@/lib/anthropic";
+import { isOpenAIConfigured } from "@/lib/openai";
 import {
   DEFAULT_SYSTEM_PROMPT,
   assembleSystemPrompt,
@@ -53,9 +53,9 @@ export async function GET(request: Request) {
   }
   if (!authed) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-  if (!isAnthropicConfigured()) {
+  if (!isOpenAIConfigured()) {
     return Response.json(
-      { error: "Research is not configured (ANTHROPIC_API_KEY missing)." },
+      { error: "Research is not configured (OPENAI_API_KEY missing)." },
       { status: 503 },
     );
   }
