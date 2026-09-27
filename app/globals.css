@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Color tokens (OKLCH) for the pages outside the studio: sign-in, the
+ * public onboarding at /grateful-future/start, and Instagram setup.
+ * The studio itself is dark-only and scoped under .gf-root in
+ * app/admin/(tool)/grateful-future/grateful-future.css.
+ */
+:root {
+  --bg: oklch(0.948 0 0);
+  --fg: oklch(0.28 0 0);
+  --muted: oklch(0.55 0 0);
+  --subtle: oklch(0.90 0 0);
+  --card: oklch(0.99 0 0);
+  --card-border: oklch(0.88 0 0);
+  --link-underline: oklch(0.76 0 0);
+  --accent: oklch(0.62 0.19 254);
+  --accent-fg: oklch(0.985 0 0);
+  --pill: oklch(0.28 0 0);
+  --pill-fg: oklch(0.97 0 0);
+}
+
+.dark {
+  --bg: #0f0f0f;
+  --fg: oklch(0.88 0 0);
+  --muted: oklch(0.62 0 0);
+  --subtle: oklch(0.25 0 0);
+  --card: oklch(0.22 0 0);
+  --card-border: oklch(0.27 0 0);
+  --link-underline: oklch(0.36 0 0);
+  --accent: oklch(0.65 0.19 254);
+  --accent-fg: oklch(0.985 0 0);
+  --pill: oklch(0.88 0 0);
+  --pill-fg: oklch(0.18 0 0);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-card: var(--card);
+  --color-card-border: var(--card-border);
+  --color-link-underline: var(--link-underline);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-pill: var(--pill);
+  --color-pill-fg: var(--pill-fg);
+
+  --font-sans: var(--font-geist-sans);
+  --font-serif: var(--font-libre-baskerville);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+em,
+i {
+  font-family: var(--font-serif), Georgia, serif;
+  font-style: italic;
+}

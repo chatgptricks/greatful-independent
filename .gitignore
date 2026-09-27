@@ -1,0 +1,31 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+/build
+next-env.d.ts
+*.tsbuildinfo
+
+# env files: never commit keys
+.env
+.env*.local
+!.env.example
+
+# local development state and credentials
+/.gf-dev/
+
+# vercel
+.vercel
+
+# commercial fonts: each person supplies their own licensed copies
+/public/fonts/licensed/*
+!/public/fonts/licensed/README.md
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
