@@ -3,6 +3,7 @@ import {
   MEMBER_COOKIE,
   MEMBER_TTL_DAYS,
   verifyMemberToken,
+  membersEnabled,
 } from "@/lib/grateful-future/member";
 
 export const runtime = "nodejs";
@@ -15,6 +16,9 @@ export const runtime = "nodejs";
  * recovery links later (same pattern as the skills subscriber unlock).
  */
 export async function GET(request: Request) {
+  if (!membersEnabled()) {
+    return NextResponse.json({ error: "Membership is disabled." }, { status: 404 });
+  }
   const url = new URL(request.url);
   const token = url.searchParams.get("token");
   if (!token) {

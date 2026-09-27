@@ -4,7 +4,7 @@ import { getSchedule, saveSchedule } from "@/lib/grateful-future/gf-db";
 export const runtime = "nodejs";
 
 async function gate(): Promise<boolean> {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return true; // local/worktree dev
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return process.env.NODE_ENV !== "production";
   return Boolean(await getCurrentAdminUser());
 }
 

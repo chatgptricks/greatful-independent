@@ -47,7 +47,7 @@ export async function GET(request: Request) {
   if (!authed) {
     if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
       authed = Boolean(await getCurrentAdminUser());
-    } else {
+    } else if (process.env.NODE_ENV !== "production") {
       authed = true; // local/worktree dev (no auth configured)
     }
   }

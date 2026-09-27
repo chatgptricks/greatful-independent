@@ -14,8 +14,8 @@ export const metadata: Metadata = {
  *
  * If the visitor already has a valid admin session, redirect straight
  * to the dashboard so they don't have to re-authenticate. Otherwise
- * render the magic-link form. The form posts to
- * /api/admin/send-magic-link which silently no-ops for any email
+ * render the email-code form. The form posts to
+ * /api/admin/send-code which silently no-ops for any email
  * not listed in OWNER_EMAIL.
  */
 export default async function AdminLoginPage({
@@ -23,8 +23,11 @@ export default async function AdminLoginPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
-  // No Supabase configured (local use): there's no sign-in, the studio is open.
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) redirect("/admin/grateful-future");
+  // Local development stays open; a production deployment must have auth.
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    if (process.env.NODE_ENV !== "production") redirect("/admin/grateful-future");
+    return <main className="mx-auto flex min-h-screen max-w-md items-center px-6 text-muted">Sign-in is not configured.</main>;
+  }
 
   const user = await getCurrentAdminUser();
   if (user) redirect("/admin/grateful-future");
@@ -43,7 +46,7 @@ export default async function AdminLoginPage({
           </h1>
           <p className="text-[14px] leading-[1.65] text-muted">
             Enter your email. If you&rsquo;re on the allowlist, a sign-in
-            link will arrive in your inbox.
+            code will arrive in your inbox.
           </p>
         </header>
         <Suspense>

@@ -5,6 +5,7 @@ import {
   MEMBER_TTL_DAYS,
   makeMemberToken,
   memberExpiry,
+  membersEnabled,
 } from "@/lib/grateful-future/member";
 
 export const runtime = "nodejs";
@@ -15,6 +16,9 @@ export const runtime = "nodejs";
  * cookie, and land the new member inside the studio.
  */
 export async function GET(request: Request) {
+  if (!membersEnabled()) {
+    return NextResponse.json({ error: "Subscriptions are disabled." }, { status: 404 });
+  }
   const url = new URL(request.url);
   const sessionId = url.searchParams.get("session_id");
   if (!sessionId) {

@@ -27,6 +27,6 @@ export default async function GratefulFutureLayout({
   children: ReactNode;
 }) {
   const access = await resolveGFAccess();
-  if (!access) redirect("/grateful-future/start");
+  if (!access) redirect("/admin/login");
   return <>{children}</>;
 }

@@ -1,3 +1,5 @@
+import { resolveGFAccess } from "@/lib/grateful-future/member";
+
 export const runtime = "nodejs";
 
 /**
@@ -31,6 +33,9 @@ function isBlockedHost(host: string): boolean {
 }
 
 export async function GET(request: Request) {
+  if (!(await resolveGFAccess())) {
+    return new Response("unauthorized", { status: 401 });
+  }
   // Don't let other sites hotlink our proxy. Same-origin <img> requests send
   // Sec-Fetch-Site: same-origin; only reject an explicit cross-site caller.
   if (request.headers.get("sec-fetch-site") === "cross-site") {

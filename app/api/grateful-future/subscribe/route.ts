@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStripe, isStripeConfigured } from "@/lib/stripe";
 import { GF_PLAN } from "@/lib/grateful-future/plan";
-import { makeMemberToken } from "@/lib/grateful-future/member";
+import { makeMemberToken, membersEnabled } from "@/lib/grateful-future/member";
 
 export const runtime = "nodejs";
 
@@ -20,6 +20,9 @@ function siteUrl(request: Request): string {
  * member-grant URL directly, so the whole onboarding flow works in dev.
  */
 export async function POST(request: Request) {
+  if (!membersEnabled()) {
+    return NextResponse.json({ error: "Subscriptions are disabled." }, { status: 404 });
+  }
   const body = (await request.json().catch(() => ({}))) as {
     email?: string;
     name?: string;

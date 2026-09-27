@@ -82,6 +82,12 @@ export type GFAccess =
   | { kind: "owner"; ownerKey: "owner" }
   | { kind: "member"; email: string; ownerKey: string };
 
+export function membersEnabled(): boolean {
+  return process.env.GF_ENABLE_MEMBERS === "true" &&
+    Boolean(process.env.UNLOCK_SECRET) &&
+    Boolean(process.env.STRIPE_SECRET_KEY);
+}
+
 /**
  * Who is using the tool right now?
  * - The site owner (Supabase admin session) → full access, the `owner` store.
@@ -91,10 +97,13 @@ export type GFAccess =
  */
 export async function resolveGFAccess(): Promise<GFAccess | null> {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    return { kind: "owner", ownerKey: "owner" };
+    return process.env.NODE_ENV === "production"
+      ? null
+      : { kind: "owner", ownerKey: "owner" };
   }
   const admin = await getCurrentAdminUser();
   if (admin) return { kind: "owner", ownerKey: "owner" };
+  if (!membersEnabled()) return null;
   try {
     const jar = await cookies();
     const token = jar.get(MEMBER_COOKIE)?.value;

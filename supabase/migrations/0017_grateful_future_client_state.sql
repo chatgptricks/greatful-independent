@@ -8,10 +8,12 @@
 -- it survives the browser and restores on the next load.
 --
 -- One row per owner; `data` is the JSON snapshot the store writes through on
--- change. Accessed only via the service-role client (no RLS needed).
+-- change. Accessed only via the service-role client.
 
 create table if not exists gf_client_state (
   owner       text primary key,
   data        jsonb not null default '{}'::jsonb,
   updated_at  timestamptz not null default now()
 );
+
+alter table public.gf_client_state enable row level security;
