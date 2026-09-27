@@ -37,7 +37,7 @@ Open http://localhost:3000. With no Supabase settings the studio opens with no s
 
 ## Deploy this independent copy on Render
 
-Create a **new Supabase project** for this copy. Run `supabase/migrations/0014` through `0017` in order in its SQL editor. In Supabase Auth, set the **Magic link or OTP** email template to contain `{{ .Token }}` (the six-digit code) instead of `{{ .ConfirmationURL }}`. The allowed owner is set with `OWNER_EMAIL`.
+Create a **new Supabase project** for this copy. Run `supabase/migrations/0014` through `0017` in order in its SQL editor. Supabase's default email template sends a one-time sign-in link; set the site URL and redirect URL in Supabase Auth. The allowed owner is set with `OWNER_EMAIL`.
 
 Create a Render **Web Service** from `chatgptricks/greatful-independent`, branch `main`, using Node 22. Build with `npm ci && npm run build` and start with `npm run start`. Set these environment variables in Render before deploying:
 
@@ -56,7 +56,7 @@ The deployed studio requires Supabase Auth; it does not open publicly if these s
 
 Additional integrations switch on when their keys are configured (see `.env.example`).
 
-- **Sign-in and a cloud story store (Supabase).** Sign-in uses a code emailed to the owner. The owner allowlist is set by `OWNER_EMAIL`.
+- **Sign-in and a cloud story store (Supabase).** Sign-in uses a one-time link emailed to the owner. The owner allowlist is set by `OWNER_EMAIL`.
 - **Scheduled research.** Needs Supabase plus `CRON_SECRET` and an external scheduler. On Vercel, `vercel.json` runs the cron hourly; Render requires its own cron job.
 - **More images.** `APIFY_TOKEN` adds "Find images on X". The Google Custom Search keys are a second source.
 - **Big uploads.** `BLOB_READ_WRITE_TOKEN` (Vercel Blob) lifts the 8MB video limit.

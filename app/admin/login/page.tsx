@@ -14,8 +14,8 @@ export const metadata: Metadata = {
  *
  * If the visitor already has a valid admin session, redirect straight
  * to the dashboard so they don't have to re-authenticate. Otherwise
- * render the email-code form. The form posts to
- * /api/admin/send-code which silently no-ops for any email
+ * render the email-link form. The form posts to
+ * /api/admin/send-magic-link which silently no-ops for any email
  * not listed in OWNER_EMAIL.
  */
 export default async function AdminLoginPage({
@@ -46,7 +46,7 @@ export default async function AdminLoginPage({
           </h1>
           <p className="text-[14px] leading-[1.65] text-muted">
             Enter your email. If you&rsquo;re on the allowlist, a sign-in
-            code will arrive in your inbox.
+            link will arrive in your inbox.
           </p>
         </header>
         <Suspense>
