@@ -608,6 +608,9 @@
   color: #fff;
   text-shadow: 0 1px 18px rgba(0, 0, 0, 0.45);
 }
+.gf-tpl-textonly .gf-tpl-text {
+  text-shadow: none;
+}
 .gf-tpl[data-align="top"] .gf-tpl-text {
   top: 0;
 }

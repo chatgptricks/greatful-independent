@@ -6,9 +6,11 @@ import {
   EMPTY_LIBRARY,
   FORMATS,
   cloneDesign,
+  createBlankTemplateDesign,
   createDesign,
   designAsTemplate,
   duplicatePage,
+  editTemplateDesign,
   parseLibrary,
   storyForDesign,
   type EditorLibrary,
@@ -255,4 +257,129 @@ test("custom template backups round-trip and do not share mutable page objects",
     parsed.templates[0].pages[0].style.heading,
     parsed.designs[0].pages[0].style.heading,
   );
+});
+
+test("manual template drafts start blank and retain their purpose after saving", () => {
+  const drafts = Object.keys(FORMATS).map((format) =>
+    createBlankTemplateDesign(
+      "  My new template  ",
+      format as keyof typeof FORMATS,
+    ),
+  );
+  for (const draft of drafts) {
+    assert.equal(draft.name, "My new template");
+    assert.equal(draft.purpose, "template");
+    assert.equal(draft.templateId, "blank-template");
+    assert.equal(draft.editingTemplateId, undefined);
+    assert.equal(draft.caption, "");
+    assert.equal(draft.pages.length, 1);
+    assert.equal(draft.pages[0].image.url, "/template-editor/folds.svg");
+    assert.deepEqual(draft.pages[0].style, {
+      template: "text",
+      heading: "",
+      body: "",
+      bgMode: "color",
+      bgColor: "#f3efe6",
+      textColor: "#263e35",
+      font: "geist",
+      align: "center",
+      textAlign: "left",
+    });
+  }
+  assert.equal(new Set(drafts.map((d) => d.id)).size, drafts.length);
+  assert.equal(new Set(drafts.map((d) => d.pages[0].id)).size, drafts.length);
+  assert.equal(
+    new Set(drafts.map((d) => d.pages[0].image.id)).size,
+    drafts.length,
+  );
+  const input: EditorLibrary = { ...EMPTY_LIBRARY, designs: drafts };
+  assert.deepEqual(parseLibrary(JSON.stringify(input)), input);
+  assert.equal(
+    createBlankTemplateDesign("   ", "portrait").name,
+    "Untitled template",
+  );
+});
+
+test("editing a saved template creates an independent persisted draft", () => {
+  const template = designAsTemplate(
+    createDesign(BUILT_IN_TEMPLATES[0]),
+    "My series",
+  );
+  const original = structuredClone(template);
+  const draft = editTemplateDesign(template);
+  const anotherDraft = editTemplateDesign(template);
+  assert.equal(draft.purpose, "template");
+  assert.equal(draft.editingTemplateId, template.id);
+  assert.equal(draft.templateId, template.id);
+  assert.equal(draft.format, template.format);
+  assert.equal(draft.name, template.name);
+  assert.notEqual(draft.id, anotherDraft.id);
+  for (const [index, page] of draft.pages.entries()) {
+    assert.notEqual(page.id, template.pages[index].id);
+    assert.notEqual(page.image.id, template.pages[index].image.id);
+    assert.deepEqual(page.style, template.pages[index].style);
+  }
+  draft.pages[0].style.heading = "Only the draft changes";
+  draft.pages[0].image.url = "/another-image.png";
+  draft.pages.push(duplicatePage(draft.pages[0]));
+  assert.deepEqual(template, original);
+  assert.deepEqual(anotherDraft.pages[0].style, original.pages[0].style);
+  const input: EditorLibrary = {
+    ...EMPTY_LIBRARY,
+    designs: [draft],
+    templates: [template],
+  };
+  assert.deepEqual(parseLibrary(JSON.stringify(input)), input);
+});
+
+test("using or copying a template produces an ordinary design without an editing target", () => {
+  const blank = createBlankTemplateDesign("My template", "square");
+  const template = designAsTemplate(blank, blank.name);
+  const editingDraft = editTemplateDesign(template);
+  const designs = [
+    createDesign(template),
+    cloneDesign(blank),
+    cloneDesign(editingDraft),
+  ];
+  for (const design of designs) {
+    assert.equal(Object.hasOwn(design, "purpose"), false);
+    assert.equal(Object.hasOwn(design, "editingTemplateId"), false);
+    assert.equal(design.format, "square");
+    assert.equal(design.pages[0].style.template, "text");
+  }
+  assert.equal(editingDraft.purpose, "template");
+  assert.equal(editingDraft.editingTemplateId, template.id);
+  const input: EditorLibrary = { ...EMPTY_LIBRARY, designs };
+  assert.deepEqual(parseLibrary(JSON.stringify(input)), input);
+});
+
+test("imported template draft metadata is validated without changing legacy designs", () => {
+  const input = library();
+  const draft = createBlankTemplateDesign("Manual template", "portrait");
+  for (const purpose of ["design", "", null, true, {}]) {
+    assert.equal(
+      parseLibrary({ ...input, designs: [{ ...draft, purpose }] }),
+      null,
+    );
+  }
+  for (const editingTemplateId of ["", "../other", "a b", null, 123, {}]) {
+    assert.equal(
+      parseLibrary({ ...input, designs: [{ ...draft, editingTemplateId }] }),
+      null,
+    );
+  }
+  assert.equal(
+    parseLibrary({
+      ...input,
+      designs: [{ ...input.designs[0], editingTemplateId: "some-template" }],
+    }),
+    null,
+  );
+  assert.ok(
+    parseLibrary({
+      ...input,
+      designs: [{ ...draft, editingTemplateId: "some-template" }],
+    }),
+  );
+  assert.deepEqual(parseLibrary(input), input);
 });

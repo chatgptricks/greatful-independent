@@ -99,6 +99,12 @@ export function DesignEditor({
   const page = design.pages.find((p) => p.id === pageId) ?? design.pages[0];
   const index = design.pages.indexOf(page);
   const format = FORMATS[design.format];
+  const isTemplateDraft = design.purpose === "template";
+  const saveTemplateLabel = isTemplateDraft
+    ? design.editingTemplateId
+      ? "Update template"
+      : "Save template"
+    : "Save as template";
   const disabled = !canEdit || Boolean(job);
 
   const commit = useCallback(
@@ -225,8 +231,8 @@ export function DesignEditor({
     if (!duplicate)
       next.style = {
         ...next.style,
-        heading: "Your next idea.",
-        body: "Add the details that bring it to life.",
+        heading: isTemplateDraft ? "" : "Your next idea.",
+        body: isTemplateDraft ? "" : "Add the details that bring it to life.",
         headingHtml: undefined,
         bodyHtml: undefined,
       };
@@ -293,6 +299,9 @@ export function DesignEditor({
                 },
                 style: {
                   ...p.style,
+                  ...(p.style.template === "text"
+                    ? ({ template: "fullbleed", textColor: "#ffffff" } as const)
+                    : {}),
                   mediaOpacity: 1,
                   mediaScale: 1,
                   mediaInX: 0,
@@ -410,7 +419,7 @@ export function DesignEditor({
         onClick={() => setTemplateName(design.name)}
       >
         <LayoutIcon />
-        Save as template
+        {saveTemplateLabel}
       </button>
       <p className="te-help">
         Double-click text on the canvas to edit it. Drag text or images to
@@ -443,8 +452,12 @@ export function DesignEditor({
         <button
           className="te-icon"
           onClick={onExit}
-          aria-label="Back to your designs"
-          title="Back to your designs"
+          aria-label={
+            isTemplateDraft ? "Back to my templates" : "Back to your designs"
+          }
+          title={
+            isTemplateDraft ? "Back to my templates" : "Back to your designs"
+          }
           disabled={Boolean(job)}
         >
           <ArrowLeftIcon size={20} />
@@ -452,7 +465,7 @@ export function DesignEditor({
         <span className="te-editor-divider" />
         <div className="te-document-title">
           <input
-            aria-label="Design name"
+            aria-label={isTemplateDraft ? "Template name" : "Design name"}
             value={design.name}
             maxLength={100}
             disabled={disabled}
@@ -461,10 +474,18 @@ export function DesignEditor({
             }
             onBlur={() => {
               if (!design.name.trim())
-                commit((d) => ({ ...d, name: "Untitled design" }));
+                commit((d) => ({
+                  ...d,
+                  name: isTemplateDraft
+                    ? "Untitled template"
+                    : "Untitled design",
+                }));
             }}
           />
-          <span role="status">{saveStatus}</span>
+          <span role="status">
+            {isTemplateDraft ? "Template draft · " : ""}
+            {saveStatus}
+          </span>
         </div>
         <div className="te-history">
           <button
@@ -488,16 +509,16 @@ export function DesignEditor({
         </div>
         <div className="te-editor-header-actions">
           <button
-            className="te-button te-save-template"
+            className={`te-button te-save-template ${isTemplateDraft ? "te-primary te-draft-save" : ""}`}
             disabled={disabled}
             onClick={() => setTemplateName(design.name)}
           >
             <LayoutIcon />
-            Save as template
+            {saveTemplateLabel}
           </button>
           <div className="te-export-anchor">
             <button
-              className="te-button te-primary"
+              className={`te-button ${isTemplateDraft ? "" : "te-primary"}`}
               disabled={Boolean(job) || uploading}
               onClick={() => setExportMenu((v) => !v)}
             >
@@ -649,9 +670,18 @@ export function DesignEditor({
             {tab === "content" && (
               <>
                 <div className="te-panel-heading">
-                  <h2>Make it yours</h2>
+                  <h2>
+                    {isTemplateDraft ? "Build your template" : "Make it yours"}
+                  </h2>
                   <span>PAGE {index + 1}</span>
                 </div>
+                {isTemplateDraft && (
+                  <p className="te-help">
+                    Add text below, choose a layout, or upload an image. Add
+                    pages to build the full template. Your draft autosaves as
+                    you work.
+                  </p>
+                )}
                 {page.style.template === "plain" ? (
                   <p className="te-help">
                     This is a photo-only layout. Choose a different layout to
@@ -980,7 +1010,11 @@ export function DesignEditor({
       </div>
       {templateName !== null && (
         <Modal
-          title="Save as a reusable template"
+          title={
+            design.editingTemplateId
+              ? "Update your template"
+              : "Save as a reusable template"
+          }
           onClose={() => setTemplateName(null)}
         >
           <form
@@ -1026,7 +1060,7 @@ export function DesignEditor({
               </button>
               <button className="te-button te-primary">
                 <CheckIcon />
-                Save template
+                {design.editingTemplateId ? "Update template" : "Save template"}
               </button>
             </div>
           </form>

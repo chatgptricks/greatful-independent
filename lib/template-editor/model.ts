@@ -21,6 +21,10 @@ export type DesignDocument = {
   caption: string;
   createdAt: string;
   updatedAt: string;
+  /** A saved editor draft for authoring a reusable template. */
+  purpose?: "template";
+  /** The reusable template this draft edits; ordinary designs never carry it. */
+  editingTemplateId?: string;
 };
 export type DesignTemplate = {
   id: string;
@@ -345,9 +349,46 @@ export function createDesign(template: DesignTemplate): DesignDocument {
   };
 }
 
+export function createBlankTemplateDesign(
+  name: string,
+  format: DesignFormat,
+): DesignDocument {
+  return {
+    ...createDesign({
+      id: "blank-template",
+      name: name.trim() || "Untitled template",
+      description: "",
+      category: "My templates",
+      format,
+      pages: [
+        page("blank-template", "folds", {
+          template: "text",
+          heading: "",
+          body: "",
+          bgMode: "color",
+          bgColor: DEFAULT_BRAND.background,
+          textColor: DEFAULT_BRAND.text,
+          font: DEFAULT_BRAND.font,
+          align: "center",
+          textAlign: "left",
+        }),
+      ],
+    }),
+    purpose: "template",
+  };
+}
+
+export function editTemplateDesign(template: DesignTemplate): DesignDocument {
+  return {
+    ...createDesign(template),
+    purpose: "template",
+    editingTemplateId: template.id,
+  };
+}
+
 export function cloneDesign(design: DesignDocument): DesignDocument {
   const now = new Date().toISOString();
-  return {
+  const copy: DesignDocument = {
     ...design,
     id: crypto.randomUUID(),
     name: `${design.name} copy`,
@@ -355,6 +396,9 @@ export function cloneDesign(design: DesignDocument): DesignDocument {
     createdAt: now,
     updatedAt: now,
   };
+  delete copy.purpose;
+  delete copy.editingTemplateId;
+  return copy;
 }
 
 export function designAsTemplate(
@@ -429,6 +473,7 @@ const FONT_IDS = new Set([
   "caveat",
 ]);
 const LAYOUTS = new Set([
+  "text",
   "plain",
   "overlay",
   "fullbleed",
@@ -760,7 +805,10 @@ export function parseLibrary(input: unknown): EditorLibrary | null {
         !string(d.createdAt, 40) ||
         !Number.isFinite(Date.parse(d.createdAt)) ||
         !string(d.updatedAt, 40) ||
-        !Number.isFinite(Date.parse(d.updatedAt))
+        !Number.isFinite(Date.parse(d.updatedAt)) ||
+        (d.purpose !== undefined && d.purpose !== "template") ||
+        (d.editingTemplateId !== undefined &&
+          (d.purpose !== "template" || !identity(d.editingTemplateId)))
       )
         return null;
       const pages = parsePages(d.pages);
@@ -774,6 +822,10 @@ export function parseLibrary(input: unknown): EditorLibrary | null {
         caption: d.caption,
         createdAt: d.createdAt,
         updatedAt: d.updatedAt,
+        ...(d.purpose === "template" ? { purpose: "template" as const } : {}),
+        ...(typeof d.editingTemplateId === "string"
+          ? { editingTemplateId: d.editingTemplateId }
+          : {}),
       });
       designIds.add(d.id);
     }
