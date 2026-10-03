@@ -36,9 +36,9 @@ export function TopNav({
   return (
     <div className="gf-topnav">
       <div className="gf-topnav-left">
-        <div className="gf-logo" aria-label="Grateful Future">
+        <a href="/admin/grateful-future" className="gf-logo" aria-label="Back to template studio" title="Back to template studio">
           <span className="gf-logo-dot" />
-        </div>
+        </a>
         {onBack ? (
           <button className="gf-back" onClick={onBack} aria-label="Back to grid">
             <ChevronLeftIcon size={17} />
