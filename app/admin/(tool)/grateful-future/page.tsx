@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import GratefulFutureClient from "./client";
 
 export const metadata: Metadata = {
-  title: "Grateful Future",
+  title: "Greatful · Template Studio",
   description:
-    "Private curation tool — review surfaced stories, read the research, tune the caption, and build the Instagram carousel.",
+    "Create posts and carousels with defined templates, editable designs, and a reusable brand kit.",
   robots: { index: false, follow: false },
 };
 

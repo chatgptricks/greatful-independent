@@ -18,9 +18,9 @@ const libreBaskerville = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Grateful Future",
+  title: "Greatful · Template Studio",
   description:
-    "Research stories and turn them into Instagram carousels.",
+    "Create posts and carousels with reusable templates.",
   robots: { index: false, follow: false },
 };
 

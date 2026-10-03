@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350" viewBox="0 0 1080 1350">
+  <defs><linearGradient id="bg" x2=".8" y2="1"><stop stop-color="#d9e0bd"/><stop offset="1" stop-color="#8d9d75"/></linearGradient><linearGradient id="leaf" x2=".9" y2=".9"><stop stop-color="#8b9e70"/><stop offset=".5" stop-color="#4f7150"/><stop offset="1" stop-color="#294f3d"/></linearGradient><linearGradient id="light" x2=".8" y2="1"><stop stop-color="#edf0ce"/><stop offset="1" stop-color="#a4b585"/></linearGradient></defs>
+  <rect width="1080" height="1350" fill="url(#bg)"/>
+  <path d="M-100-60H430Q880 495 960 1380H-100Z" fill="url(#leaf)"/>
+  <path d="M90-80Q950 70 1120 715V-80Z" fill="url(#light)"/>
+  <path d="M-80 970Q560 435 1190 620V1430H-80Z" fill="url(#light)"/>
+  <path d="M-100 1390Q390 610 1170 750V1390Z" fill="url(#leaf)"/>
+  <g fill="none" stroke="#f2f0d1" opacity=".38" stroke-width="2"><path d="M-30-50Q530 370 690 825"/><path d="M-20 1290Q475 718 1100 794"/><path d="M10 1320Q485 747 1100 824"/><path d="M40 1350Q495 776 1100 854"/><path d="M70 1380Q505 805 1100 884"/></g>
+  <circle cx="866" cy="352" r="72" fill="#f0edca" opacity=".8"/>
+</svg>

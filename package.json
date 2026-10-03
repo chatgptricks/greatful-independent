@@ -9,7 +9,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:template-editor": "node --test tests/template-editor-*.test.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
