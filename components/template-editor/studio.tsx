@@ -15,10 +15,13 @@ import {
   BUILT_IN_TEMPLATES,
   FORMATS,
   createDesign,
+  createBlankTemplateDesign,
+  editTemplateDesign,
   cloneDesign,
   parseLibrary,
   type DesignDocument,
   type DesignTemplate,
+  type DesignFormat,
 } from "@/lib/template-editor/model";
 import { useEditorLibrary } from "@/lib/template-editor/use-library";
 import { saveBlob } from "@/lib/template-editor/export";
@@ -65,6 +68,10 @@ export default function TemplateStudio() {
     name: string;
   } | null>(null);
   const [conflictOpen, setConflictOpen] = useState(false);
+  const [newTemplate, setNewTemplate] = useState<{
+    name: string;
+    format: DesignFormat;
+  } | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const templates = [...BUILT_IN_TEMPLATES, ...library.templates];
   const active = library.designs.find((d) => d.id === activeId);
@@ -80,6 +87,22 @@ export default function TemplateStudio() {
   function openTemplate(template: DesignTemplate) {
     if (!canEdit) return;
     const document = createDesign(template);
+    setLibrary((current) => ({
+      ...current,
+      designs: [document, ...current.designs],
+    }));
+    setActiveId(document.id);
+  }
+  function openTemplateEditor(template: DesignTemplate) {
+    const draft = library.designs.find(
+      (d) => d.purpose === "template" && d.editingTemplateId === template.id,
+    );
+    if (draft) {
+      setActiveId(draft.id);
+      return;
+    }
+    if (!canEdit || library.designs.length >= 150) return;
+    const document = editTemplateDesign(template);
     setLibrary((current) => ({
       ...current,
       designs: [document, ...current.designs],
@@ -117,6 +140,15 @@ export default function TemplateStudio() {
       const restoredDesigns = imported.designs.map((design) => ({
         ...cloneDesign(design),
         templateId: templateIds.get(design.templateId) ?? design.templateId,
+        ...(design.purpose === "template"
+          ? {
+              purpose: "template" as const,
+              editingTemplateId: design.editingTemplateId
+                ? (templateIds.get(design.editingTemplateId) ??
+                  design.editingTemplateId)
+                : undefined,
+            }
+          : {}),
       }));
       setLibrary((current) => ({
         ...current,
@@ -176,7 +208,8 @@ export default function TemplateStudio() {
           canEdit={canEdit}
           onExit={() => {
             setActiveId(null);
-            setView("designs");
+            setView(active.purpose === "template" ? "templates" : "designs");
+            if (active.purpose === "template") setCategory("My templates");
           }}
           onChange={(design) =>
             setLibrary((current) => ({
@@ -187,12 +220,37 @@ export default function TemplateStudio() {
             }))
           }
           onSaveTemplate={(template) => {
-            if (library.templates.length >= 80)
+            const existingId =
+              active.purpose === "template"
+                ? active.editingTemplateId
+                : undefined;
+            if (
+              library.templates.length >= 80 &&
+              !library.templates.some((t) => t.id === existingId)
+            )
               throw new Error("Your library has reached 80 custom templates.");
             setLibrary((current) => ({
               ...current,
-              templates: [template, ...current.templates],
+              templates: [
+                { ...template, id: existingId ?? template.id },
+                ...current.templates.filter((t) => t.id !== existingId),
+              ],
+              designs:
+                active.purpose === "template"
+                  ? current.designs.filter((d) => d.id !== active.id)
+                  : current.designs,
             }));
+            if (active.purpose === "template") {
+              setActiveId(null);
+              setView("templates");
+              setCategory("My templates");
+              setQuery("");
+              setMessage(
+                existingId
+                  ? "Template updated. Existing posts keep their own content and styling."
+                  : "Template created. Use it as the starting point for your next post.",
+              );
+            }
           }}
         />
       ) : (
@@ -212,12 +270,29 @@ export default function TemplateStudio() {
                 {statusText}
               </span>
               <button
-                className="te-button te-primary"
+                className="te-button te-new-design"
                 onClick={() => openTemplate(BUILT_IN_TEMPLATES[0])}
                 disabled={!canEdit || library.designs.length >= 150}
               >
                 <PlusIcon />
                 New design
+              </button>
+              <button
+                className="te-button te-primary"
+                disabled={
+                  !canEdit ||
+                  library.designs.length >= 150 ||
+                  library.templates.length >= 80
+                }
+                onClick={() =>
+                  setNewTemplate({
+                    name: "Untitled template",
+                    format: "portrait",
+                  })
+                }
+              >
+                <PlusIcon />
+                Create template
               </button>
             </div>
           </header>
@@ -348,6 +423,56 @@ export default function TemplateStudio() {
                     ))}
                   </div>
                   <div className="te-template-grid">
+                    {category === "My templates" &&
+                      library.designs
+                        .filter((d) => d.purpose === "template")
+                        .map((draft) => (
+                          <article className="te-template-card" key={draft.id}>
+                            <button
+                              className="te-template-open"
+                              onClick={() => setActiveId(draft.id)}
+                            >
+                              <div className="te-template-art">
+                                <DesignPreview
+                                  design={draft}
+                                  page={draft.pages[0]}
+                                />
+                                <span className="te-page-count">
+                                  TEMPLATE DRAFT
+                                </span>
+                                <span className="te-card-action">
+                                  Continue editing
+                                  <ArrowRightIcon size={15} />
+                                </span>
+                              </div>
+                              <span className="te-card-name">{draft.name}</span>
+                              <span className="te-card-description">
+                                Your changes are autosaved. Save the template
+                                when it’s ready.
+                              </span>
+                            </button>
+                          </article>
+                        ))}
+                    {category === "My templates" && (
+                      <button
+                        className="te-blank-template"
+                        disabled={
+                          !canEdit ||
+                          library.designs.length >= 150 ||
+                          library.templates.length >= 80
+                        }
+                        onClick={() =>
+                          setNewTemplate({
+                            name: "Untitled template",
+                            format: "portrait",
+                          })
+                        }
+                      >
+                        <PlusIcon size={26} />
+                        <strong>Create a template</strong>
+                        <span>Start with a blank canvas</span>
+                      </button>
+                    )}
                     {templates
                       .filter(
                         (t) =>
@@ -390,48 +515,65 @@ export default function TemplateStudio() {
                             </span>
                           </button>
                           {template.custom && (
-                            <button
-                              className="te-icon te-card-delete"
-                              title="Delete template"
-                              aria-label={`Delete ${template.name} template`}
-                              onClick={() =>
-                                setConfirm({
-                                  kind: "template",
-                                  id: template.id,
-                                  name: template.name,
-                                })
-                              }
-                            >
-                              <TrashIcon />
-                            </button>
+                            <div className="te-design-actions">
+                              <button
+                                className="te-icon"
+                                title="Edit template"
+                                aria-label={`Edit ${template.name} template`}
+                                disabled={
+                                  !canEdit || library.designs.length >= 150
+                                }
+                                onClick={() => openTemplateEditor(template)}
+                              >
+                                <LayoutIcon />
+                              </button>
+                              <button
+                                className="te-icon"
+                                title="Delete template"
+                                aria-label={`Delete ${template.name} template`}
+                                onClick={() =>
+                                  setConfirm({
+                                    kind: "template",
+                                    id: template.id,
+                                    name: template.name,
+                                  })
+                                }
+                              >
+                                <TrashIcon />
+                              </button>
+                            </div>
                           )}
                         </article>
                       ))}
                   </div>
-                  {!templates.some(
-                    (t) =>
-                      (category === "All templates" ||
-                        (category === "My templates"
-                          ? t.custom
-                          : t.category === category)) &&
-                      `${t.name} ${t.description} ${t.category}`
-                        .toLowerCase()
-                        .includes(query.toLowerCase()),
-                  ) && (
-                    <div className="te-empty">
-                      <LayoutIcon size={28} />
-                      <h3>
-                        {category === "My templates"
-                          ? "Your next signature template starts here."
-                          : "No templates found."}
-                      </h3>
-                      <p>
-                        {category === "My templates"
-                          ? "Open a design and choose Save as template to use it again."
-                          : "Try a different search or category."}
-                      </p>
-                    </div>
-                  )}
+                  {!(
+                    category === "My templates" &&
+                    library.designs.some((d) => d.purpose === "template")
+                  ) &&
+                    !templates.some(
+                      (t) =>
+                        (category === "All templates" ||
+                          (category === "My templates"
+                            ? t.custom
+                            : t.category === category)) &&
+                        `${t.name} ${t.description} ${t.category}`
+                          .toLowerCase()
+                          .includes(query.toLowerCase()),
+                    ) && (
+                      <div className="te-empty">
+                        <LayoutIcon size={28} />
+                        <h3>
+                          {category === "My templates"
+                            ? "Your next signature template starts here."
+                            : "No templates found."}
+                        </h3>
+                        <p>
+                          {category === "My templates"
+                            ? "Choose Create template to build one from a blank canvas."
+                            : "Try a different search or category."}
+                        </p>
+                      </div>
+                    )}
                 </>
               )}
               {view === "designs" && (
@@ -492,6 +634,9 @@ export default function TemplateStudio() {
                                 page={design.pages[0]}
                               />
                               <span className="te-page-count">
+                                {design.purpose === "template"
+                                  ? "Template draft · "
+                                  : ""}
                                 {design.pages.length}{" "}
                                 {design.pages.length === 1 ? "page" : "pages"}
                               </span>
@@ -655,6 +800,91 @@ export default function TemplateStudio() {
             </main>
           </div>
         </>
+      )}
+      {newTemplate && (
+        <Modal title="Create a template" onClose={() => setNewTemplate(null)}>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (
+                !canEdit ||
+                library.designs.length >= 150 ||
+                library.templates.length >= 80
+              )
+                return;
+              const document = createBlankTemplateDesign(
+                newTemplate.name.trim() || "Untitled template",
+                newTemplate.format,
+              );
+              setLibrary((current) => ({
+                ...current,
+                designs: [document, ...current.designs],
+              }));
+              setActiveId(document.id);
+              setNewTemplate(null);
+            }}
+          >
+            <p>
+              Start with an empty canvas. Add your own text, images, colors, and
+              pages to build a reusable template.
+            </p>
+            <label className="te-field">
+              Template name
+              <input
+                autoFocus
+                required
+                maxLength={100}
+                value={newTemplate.name}
+                onChange={(event) =>
+                  setNewTemplate({ ...newTemplate, name: event.target.value })
+                }
+              />
+            </label>
+            <fieldset className="te-format-options">
+              <legend>Choose a format</legend>
+              {Object.entries(FORMATS).map(([id, format]) => (
+                <label
+                  key={id}
+                  className={newTemplate.format === id ? "is-active" : ""}
+                >
+                  <input
+                    type="radio"
+                    name="template-format"
+                    value={id}
+                    checked={newTemplate.format === id}
+                    onChange={() =>
+                      setNewTemplate({
+                        ...newTemplate,
+                        format: id as DesignFormat,
+                      })
+                    }
+                  />
+                  <span
+                    className="te-format-shape"
+                    style={{ aspectRatio: `${format.width}/${format.height}` }}
+                  />
+                  <strong>{format.label}</strong>
+                  <small>
+                    {format.width} × {format.height}
+                  </small>
+                </label>
+              ))}
+            </fieldset>
+            <div className="te-modal-actions">
+              <button
+                className="te-button"
+                type="button"
+                onClick={() => setNewTemplate(null)}
+              >
+                Cancel
+              </button>
+              <button className="te-button te-primary" disabled={!canEdit}>
+                Open template editor
+                <ArrowRightIcon size={15} />
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
       {confirm && (
         <Modal

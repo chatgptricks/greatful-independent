@@ -105,6 +105,7 @@ export interface StoryImage {
  * font / placement override the defaults. Stored per image id in the curation.
  */
 export type SlideTemplate =
+  | "text"
   | "plain"
   | "overlay"
   | "fullbleed"

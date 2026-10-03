@@ -14,6 +14,12 @@ Built with Next.js 16, React 19, and Tailwind v4. The editor reuses the establis
 4. Use **Save as template** to keep the complete design as a starting point for future posts. Copies receive independent page and image identities.
 5. Export the current page as PNG, or all pages as a ZIP containing numbered PNGs and the post caption when present. Captions can also be downloaded separately as TXT.
 
+## Build your own template
+
+Choose **Create template**, enter a name, and select portrait, square, or Story format. The editor opens an empty canvas with a text-only layout. Write your own heading and body, set typography and colors, upload an image, and add or arrange pages manually. Uploading an image to a text-only page switches it to a full-bleed layout so the image is visible immediately.
+
+Template drafts autosave and can be resumed from **My templates** or **Your designs**. **Save template** places the finished template in **My templates**. Use a custom template's **Edit template** action to reopen it, then **Update template** to replace that template. Existing posts remain independent of future template edits.
+
 | Format | Export size |
 |---|---|
 | Portrait post | 1080 × 1350 px |

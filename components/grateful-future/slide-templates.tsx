@@ -33,6 +33,7 @@ import { RichTextEl } from "./rich-text";
  * width + height independently.
  */
 export const TEMPLATES: Array<{ id: SlideTemplate; label: string }> = [
+  { id: "text", label: "Text only" },
   { id: "plain", label: "Plain" },
   { id: "overlay", label: "Overlay" },
   { id: "fullbleed", label: "Full bleed" },
@@ -781,6 +782,18 @@ export function SlideFrame({
       sound={sound}
     />
   );
+
+  if (style.template === "text") {
+    return (
+      <div className="gf-tpl gf-tpl-textonly" data-align={align}>
+        <BgLayer style={style} img={img} />
+        <TextBlock style={style} onSet={onSet} selected={selected === "text"} onSelect={pickText} className={`gf-tpl-text ${fontClass}`}>
+          <RichTextEl tag="h2" className="gf-tpl-head" text={heading} html={style.headingHtml} field="heading" onSet={onSet} />
+          {body && <RichTextEl tag="p" className="gf-tpl-body" text={body} html={style.bodyHtml} field="body" onSet={onSet} />}
+        </TextBlock>
+      </div>
+    );
+  }
 
   if (style.template === "quote") {
     return (
