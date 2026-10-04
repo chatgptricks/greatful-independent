@@ -16,6 +16,8 @@ import {
   FORMATS,
   createDesign,
   createBlankTemplateDesign,
+  createBlankDesign,
+  sceneForPage,
   editTemplateDesign,
   cloneDesign,
   parseLibrary,
@@ -87,6 +89,19 @@ export default function TemplateStudio() {
   function openTemplate(template: DesignTemplate) {
     if (!canEdit) return;
     const document = createDesign(template);
+    document.pages = document.pages.map((p) => ({
+      ...p,
+      canvas: sceneForPage(p, document.format),
+    }));
+    setLibrary((current) => ({
+      ...current,
+      designs: [document, ...current.designs],
+    }));
+    setActiveId(document.id);
+  }
+  function openBlankDesign() {
+    if (!canEdit || library.designs.length >= 150) return;
+    const document = createBlankDesign("Untitled design", "portrait");
     setLibrary((current) => ({
       ...current,
       designs: [document, ...current.designs],
@@ -271,7 +286,7 @@ export default function TemplateStudio() {
               </span>
               <button
                 className="te-button te-new-design"
-                onClick={() => openTemplate(BUILT_IN_TEMPLATES[0])}
+                onClick={openBlankDesign}
                 disabled={!canEdit || library.designs.length >= 150}
               >
                 <PlusIcon />

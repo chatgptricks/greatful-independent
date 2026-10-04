@@ -1,0 +1,255 @@
+.te-canvas-scene {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  isolation: isolate;
+  user-select: none;
+}
+
+.te-canvas-element,
+.te-canvas-hit,
+.te-canvas-outline,
+.te-canvas-edit-box {
+  position: absolute;
+  box-sizing: border-box;
+  transform-origin: center center;
+}
+
+.te-canvas-element {
+  pointer-events: none;
+}
+.te-canvas-text {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-kerning: normal;
+}
+.te-canvas-text.gf-font-serif {
+  font-family: var(--font-serif), Georgia, "Times New Roman", serif;
+}
+.te-canvas-text.gf-font-sans {
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+.te-canvas-image,
+.te-canvas-shape {
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+.te-canvas-image {
+  max-width: none;
+  user-select: none;
+}
+
+.te-canvas-editor {
+  --te-canvas-accent: #7967df;
+  position: relative;
+  flex: none;
+  outline: none;
+  isolation: isolate;
+  touch-action: none;
+  user-select: none;
+}
+.te-canvas-editor > .te-canvas-scene {
+  pointer-events: none;
+}
+.te-canvas-hit-area {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.te-canvas-hit {
+  pointer-events: auto;
+  cursor: move;
+  outline: none;
+  touch-action: none;
+}
+.te-canvas-hit:not(.is-selected):hover {
+  outline: 1px solid var(--te-canvas-accent);
+}
+.te-canvas-hit:focus-visible {
+  outline: 2px solid var(--te-canvas-accent);
+  outline-offset: 2px;
+}
+.te-canvas-hit.is-locked {
+  cursor: default;
+}
+.te-canvas-editor.is-disabled .te-canvas-hit {
+  pointer-events: none;
+}
+.te-canvas-editor.is-transforming .te-canvas-hit {
+  cursor: inherit;
+}
+
+.te-canvas-outline {
+  z-index: 3;
+  outline: 1.5px solid var(--te-canvas-accent);
+  pointer-events: none;
+}
+.te-canvas-outline.is-member {
+  outline-width: 1px;
+  outline-style: dashed;
+}
+.te-canvas-outline.is-locked {
+  outline-color: #8a8b96;
+  outline-style: dashed;
+}
+.te-canvas-layer-label {
+  position: absolute;
+  top: -21px;
+  left: -1px;
+  max-width: 220px;
+  padding: 2px 5px;
+  border-radius: 3px 3px 0 0;
+  background: var(--te-canvas-accent);
+  color: #fff;
+  font:
+    500 9px/14px system-ui,
+    sans-serif;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.te-canvas-outline.is-locked .te-canvas-layer-label {
+  background: #777a87;
+}
+.te-canvas-handle,
+.te-canvas-rotate {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 9px;
+  height: 9px;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid var(--te-canvas-accent);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--te-canvas-accent);
+  box-shadow: 0 1px 2px #0002;
+  pointer-events: auto;
+  touch-action: none;
+  transform: translate(-50%, -50%);
+}
+.te-canvas-handle::after,
+.te-canvas-rotate::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+}
+.te-canvas-handle:focus-visible,
+.te-canvas-rotate:focus-visible {
+  outline: 2px solid #fff;
+  box-shadow: 0 0 0 3px var(--te-canvas-accent);
+}
+.te-canvas-handle-nw {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+.te-canvas-handle-n {
+  left: 50%;
+  top: 0;
+  cursor: ns-resize;
+}
+.te-canvas-handle-ne {
+  left: 100%;
+  top: 0;
+  cursor: nesw-resize;
+}
+.te-canvas-handle-e {
+  left: 100%;
+  top: 50%;
+  cursor: ew-resize;
+}
+.te-canvas-handle-se {
+  left: 100%;
+  top: 100%;
+  cursor: nwse-resize;
+}
+.te-canvas-handle-s {
+  left: 50%;
+  top: 100%;
+  cursor: ns-resize;
+}
+.te-canvas-handle-sw {
+  left: 0;
+  top: 100%;
+  cursor: nesw-resize;
+}
+.te-canvas-handle-w {
+  left: 0;
+  top: 50%;
+  cursor: ew-resize;
+}
+.te-canvas-rotate-line {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  height: 24px;
+  border-left: 1px solid var(--te-canvas-accent);
+}
+.te-canvas-rotate {
+  left: 50%;
+  top: -25px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  cursor: grab;
+}
+.te-canvas-rotate:active {
+  cursor: grabbing;
+}
+.te-canvas-guide {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+}
+.te-canvas-guide-x {
+  top: 0;
+  height: 100%;
+  border-left: 1px dashed #e542b3;
+}
+.te-canvas-guide-y {
+  left: 0;
+  width: 100%;
+  border-top: 1px dashed #e542b3;
+}
+
+.te-canvas-edit-box {
+  z-index: 2;
+}
+.te-canvas-edit-text {
+  cursor: text;
+  user-select: text;
+  touch-action: manipulation;
+  outline: none;
+  caret-color: currentColor;
+}
+.te-canvas-edit-text::selection,
+.te-canvas-edit-text *::selection {
+  background: #9a86ff66;
+}
+.te-canvas-screen-reader {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}

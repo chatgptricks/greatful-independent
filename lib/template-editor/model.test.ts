@@ -6,14 +6,20 @@ import {
   EMPTY_LIBRARY,
   FORMATS,
   cloneDesign,
+  createBlankDesign,
   createBlankTemplateDesign,
+  createCanvasElement,
   createDesign,
   designAsTemplate,
   duplicatePage,
   editTemplateDesign,
   parseLibrary,
+  resizeCanvasScene,
+  sceneForPage,
   storyForDesign,
   type EditorLibrary,
+  type CanvasElement,
+  type CanvasScene,
 } from "./model";
 
 function library(): EditorLibrary {
@@ -382,4 +388,452 @@ test("imported template draft metadata is validated without changing legacy desi
     }),
   );
   assert.deepEqual(parseLibrary(input), input);
+});
+
+function canvasLibrary(elements: CanvasElement[]): EditorLibrary {
+  const input = library();
+  input.designs[0].pages[0].canvas = { background: "#f3efe6", elements };
+  return input;
+}
+
+test("empty designs and empty template drafts persist genuinely empty scenes", () => {
+  const design = createBlankDesign("  A blank post  ", "story");
+  const draft = createBlankTemplateDesign("My blank template", "square");
+  assert.equal(design.name, "A blank post");
+  assert.equal(design.templateId, "blank-design");
+  assert.equal(Object.hasOwn(design, "purpose"), false);
+  assert.equal(draft.purpose, "template");
+  assert.deepEqual(design.pages[0].canvas, {
+    background: DEFAULT_BRAND.background,
+    elements: [],
+  });
+  assert.deepEqual(draft.pages[0].canvas, design.pages[0].canvas);
+  assert.notEqual(draft.pages[0].canvas, design.pages[0].canvas);
+  assert.equal(createBlankDesign(" ", "portrait").name, "Untitled design");
+  const input: EditorLibrary = { ...EMPTY_LIBRARY, designs: [design, draft] };
+  assert.deepEqual(parseLibrary(JSON.stringify(input)), input);
+});
+
+test("independent text, image and shape layers retain stacking, transforms and styling", () => {
+  const elements = [
+    createCanvasElement("shape", {
+      name: "Accent",
+      shape: "ellipse",
+      fill: "#ffee99",
+      stroke: "#336633",
+      strokeWidth: 2,
+      rotation: -35,
+      radius: 24,
+    }),
+    createCanvasElement("image", {
+      name: "Product",
+      src: "/template-editor/sculpture.svg",
+      fit: "contain",
+      cropX: 21,
+      cropY: 78,
+      radius: 18,
+      opacity: 0.8,
+      width: 120,
+      height: 180,
+    }),
+    createCanvasElement("text", {
+      name: "Title",
+      text: "A title\nwith another line",
+      font: "dmserif",
+      fontSize: 36,
+      fontWeight: 500,
+      italic: true,
+      underline: true,
+      align: "center",
+      color: "#123456",
+      lineHeight: 1.4,
+      letterSpacing: 2.5,
+      x: -20,
+      y: 260,
+      rotation: 15,
+      locked: true,
+    }),
+    createCanvasElement("text", {
+      name: "Body",
+      text: "An independent caption",
+      fontSize: 14,
+      y: 360,
+    }),
+  ];
+  const input = canvasLibrary(elements);
+  const parsed = parseLibrary(JSON.stringify(input))!;
+  assert.deepEqual(parsed, input);
+  assert.deepEqual(
+    parsed.designs[0].pages[0].canvas!.elements.map((element) => element.name),
+    ["Accent", "Product", "Title", "Body"],
+  );
+  assert.equal(
+    new Set(elements.map((element) => element.id)).size,
+    elements.length,
+  );
+  parsed.designs[0].pages[0].canvas!.elements[0].x = 200;
+  assert.notEqual(
+    parsed.designs[0].pages[0].canvas!.elements[0].x,
+    elements[0].x,
+  );
+});
+
+test("all design and template copy paths isolate canvas layers and regenerate their identities", () => {
+  const design = createBlankDesign("Layered original", "portrait");
+  const originalScene: CanvasScene = {
+    background: "#aabbcc",
+    elements: [
+      createCanvasElement("text", { text: "Keep this" }),
+      createCanvasElement("image"),
+      createCanvasElement("shape"),
+    ],
+  };
+  design.pages[0].canvas = originalScene;
+  const template = designAsTemplate(design, "Reusable layers");
+  const copies = [
+    duplicatePage(design.pages[0]),
+    cloneDesign(design).pages[0],
+    template.pages[0],
+    createDesign(template).pages[0],
+    editTemplateDesign(template).pages[0],
+  ];
+  const ids = new Set(originalScene.elements.map((element) => element.id));
+  for (const page of copies) {
+    const scene = page.canvas!;
+    assert.notEqual(scene, originalScene);
+    assert.notEqual(scene.elements, originalScene.elements);
+    assert.equal(scene.background, "#aabbcc");
+    for (const [index, element] of scene.elements.entries()) {
+      assert.equal(ids.has(element.id), false);
+      ids.add(element.id);
+      assert.notEqual(element, originalScene.elements[index]);
+      element.x = 300;
+    }
+    scene.background = "#000000";
+  }
+  assert.equal(originalScene.background, "#aabbcc");
+  assert.ok(originalScene.elements.every((element) => element.x === 36));
+});
+
+test("legacy migration is deterministic, does not rewrite pages, and preserves built-in content", () => {
+  for (const template of BUILT_IN_TEMPLATES) {
+    const design = createDesign(template);
+    const original = structuredClone(design);
+    for (const page of design.pages) {
+      const scene = sceneForPage(page, design.format);
+      assert.deepEqual(sceneForPage(page, design.format), scene);
+      assert.equal(page.canvas, undefined);
+      const text = scene.elements
+        .filter((element) => element.type === "text")
+        .map((element) => element.text);
+      if (page.style.heading) assert.ok(text.includes(page.style.heading));
+      if (page.style.body) assert.ok(text.includes(page.style.body));
+      if (page.style.template !== "quote")
+        assert.ok(
+          scene.elements.some(
+            (element) =>
+              element.type === "image" && element.src === page.image.url,
+          ),
+        );
+      const copied = duplicatePage(page);
+      copied.canvas = scene;
+      assert.ok(
+        parseLibrary({
+          ...EMPTY_LIBRARY,
+          designs: [{ ...design, pages: [copied] }],
+        }),
+      );
+    }
+    assert.deepEqual(design, original);
+  }
+  const existing = createBlankDesign("Already migrated", "square").pages[0];
+  existing.canvas!.elements.push(createCanvasElement("shape"));
+  assert.equal(sceneForPage(existing, "square"), existing.canvas);
+});
+
+test("migration supports every legacy layout at each format without coupling text and media", () => {
+  for (const format of ["portrait", "square", "story"] as const) {
+    for (const layout of [
+      "plain",
+      "text",
+      "overlay",
+      "fullbleed",
+      "quote",
+      "stacked",
+      "blur",
+      "split",
+      "masonry",
+    ] as const) {
+      const page = duplicatePage(BUILT_IN_TEMPLATES[0].pages[0]);
+      page.style = {
+        template: layout,
+        heading: "Headline",
+        body: "Body copy",
+        font: "geist",
+        textColor: "#fefefe",
+        bgMode: "color",
+        bgColor: "#303030",
+        mediaInX: 20,
+        mediaInY: -10,
+        letterSpacing: 0.1,
+      };
+      const scene = sceneForPage(page, format);
+      const texts = scene.elements.filter((element) => element.type === "text");
+      assert.equal(
+        texts.some((element) => element.text === "Headline"),
+        layout !== "plain",
+      );
+      assert.equal(
+        texts.some((element) => element.text === "Body copy"),
+        layout !== "plain",
+      );
+      for (const text of texts)
+        assert.equal(text.letterSpacing, text.fontSize * 0.1);
+      const images = scene.elements.filter(
+        (element) => element.type === "image",
+      );
+      assert.equal(images.length > 0, layout !== "text" && layout !== "quote");
+      for (const image of images) {
+        assert.equal(image.cropX, 30);
+        assert.equal(image.cropY, 60);
+      }
+      assert.equal(scene.background, "#303030");
+      assert.ok(
+        parseLibrary({
+          ...EMPTY_LIBRARY,
+          designs: [
+            {
+              ...createDesign(BUILT_IN_TEMPLATES[0]),
+              format,
+              pages: [{ ...page, canvas: scene }],
+            },
+          ],
+        }),
+      );
+    }
+  }
+});
+
+test("scene parsing rejects malformed geometry and required fields instead of silently changing artwork", () => {
+  for (const [field, values] of Object.entries({
+    x: [NaN, Infinity, -10_001, 10_001, "0"],
+    y: [-Infinity, -10_001, 10_001],
+    width: [0, -1, 10_001, null],
+    height: [0, -1, 10_001],
+    rotation: [-3601, 3601, NaN],
+    opacity: [-0.1, 1.1],
+    locked: ["false", 0, null],
+    fontSize: [0, 501],
+    lineHeight: [0.4, 5.1],
+    fontWeight: [0, 901],
+    letterSpacing: [-21, 101, NaN],
+    italic: [0, "false"],
+    underline: [0, "false"],
+    align: ["justify", null],
+  })) {
+    for (const value of values) {
+      const input = canvasLibrary([createCanvasElement("text")]);
+      Object.assign(input.designs[0].pages[0].canvas!.elements[0], {
+        [field]: value,
+      });
+      assert.equal(parseLibrary(input), null, `${field}=${String(value)}`);
+    }
+  }
+  for (const field of [
+    "id",
+    "name",
+    "x",
+    "height",
+    "rotation",
+    "opacity",
+    "locked",
+    "text",
+    "font",
+    "lineHeight",
+  ]) {
+    const input = canvasLibrary([createCanvasElement("text")]);
+    Reflect.deleteProperty(
+      input.designs[0].pages[0].canvas!.elements[0],
+      field,
+    );
+    assert.equal(parseLibrary(input), null, `missing ${field}`);
+  }
+});
+
+test("scenes enforce the layer cap, unique layer IDs and known element types", () => {
+  const elements = Array.from({ length: 100 }, () =>
+    createCanvasElement("shape"),
+  );
+  assert.ok(parseLibrary(canvasLibrary(elements)));
+  assert.equal(
+    parseLibrary(canvasLibrary([...elements, createCanvasElement("text")])),
+    null,
+  );
+  assert.equal(
+    parseLibrary(canvasLibrary([elements[0], { ...elements[0] }])),
+    null,
+  );
+  const invalid = canvasLibrary([createCanvasElement("text")]);
+  Object.assign(invalid.designs[0].pages[0].canvas!.elements[0], {
+    type: "html",
+  });
+  assert.equal(parseLibrary(invalid), null);
+  for (const canvas of [
+    null,
+    {},
+    [],
+    { background: "#fff", elements: "wrong" },
+  ]) {
+    const input = library();
+    Object.assign(input.designs[0].pages[0], { canvas });
+    assert.equal(parseLibrary(input), null);
+  }
+});
+
+test("scene media and styling reject executable URLs, arbitrary CSS and invalid variant values", () => {
+  for (const src of [
+    "javascript:alert(1)",
+    "blob:temporary",
+    "data:image/svg+xml;base64,PHN2Zz4=",
+    "data:image/png;base64,PHNjcmlwdD4=",
+    "//example.com/track",
+  ]) {
+    assert.equal(
+      parseLibrary(canvasLibrary([createCanvasElement("image", { src })])),
+      null,
+    );
+  }
+  for (const patch of [
+    { fit: "fill" },
+    { cropX: -1 },
+    { cropY: 101 },
+    { radius: -1 },
+    { radius: 5001 },
+  ]) {
+    const input = canvasLibrary([createCanvasElement("image")]);
+    Object.assign(input.designs[0].pages[0].canvas!.elements[0], patch);
+    assert.equal(parseLibrary(input), null);
+  }
+  for (const patch of [
+    { shape: "script" },
+    { fill: "url(https://example.com)" },
+    { stroke: "expression(alert(1))" },
+    { strokeWidth: 201 },
+    { radius: -1 },
+  ]) {
+    const input = canvasLibrary([createCanvasElement("shape")]);
+    Object.assign(input.designs[0].pages[0].canvas!.elements[0], patch);
+    assert.equal(parseLibrary(input), null);
+  }
+  for (const patch of [
+    { font: "url(https://example.com)" },
+    { color: "var(--tracking)" },
+    { text: "x".repeat(20_001) },
+  ]) {
+    const input = canvasLibrary([createCanvasElement("text")]);
+    Object.assign(input.designs[0].pages[0].canvas!.elements[0], patch);
+    assert.equal(parseLibrary(input), null);
+  }
+  const background = canvasLibrary([]);
+  background.designs[0].pages[0].canvas!.background =
+    "url(https://example.com)";
+  assert.equal(parseLibrary(background), null);
+});
+
+test("scene parser keeps text literal and removes unknown HTML and event handler fields", () => {
+  const literal = '<img src="x" onerror="alert(1)">';
+  const input = canvasLibrary([createCanvasElement("text", { text: literal })]);
+  Object.assign(input.designs[0].pages[0].canvas!.elements[0], {
+    html: literal,
+    onClick: "alert(1)",
+    constructor: { polluted: true },
+  });
+  const element = parseLibrary(input)!.designs[0].pages[0].canvas!.elements[0];
+  assert.equal(element.type, "text");
+  assert.equal(element.type === "text" && element.text, literal);
+  assert.equal(Object.hasOwn(element, "html"), false);
+  assert.equal(Object.hasOwn(element, "onClick"), false);
+  assert.equal(Object.hasOwn(element, "constructor"), false);
+});
+
+test("format resizing preserves type, horizontal geometry and stacking, and round-trips normal scenes", () => {
+  const scene: CanvasScene = {
+    background: "#f3efe6",
+    elements: [
+      createCanvasElement("image", {
+        x: 40,
+        y: 70,
+        width: 200,
+        height: 150,
+        rotation: 20,
+      }),
+      createCanvasElement("shape", { x: -12, y: 120, width: 90, height: 80 }),
+      createCanvasElement("text", {
+        x: 30,
+        y: 200,
+        height: 64,
+        fontSize: 24,
+        text: "Keep my type",
+      }),
+    ],
+  };
+  const original = structuredClone(scene);
+  for (const from of ["portrait", "square", "story"] as const) {
+    for (const to of ["portrait", "square", "story"] as const) {
+      const resized = resizeCanvasScene(scene, from, to);
+      const restored = resizeCanvasScene(resized, to, from);
+      assert.equal(resized.background, scene.background);
+      for (const [index, element] of resized.elements.entries()) {
+        assert.equal(element.id, scene.elements[index].id);
+        assert.equal(element.x, scene.elements[index].x);
+        assert.equal(element.width, scene.elements[index].width);
+        assert.equal(element.rotation, scene.elements[index].rotation);
+        assert.notEqual(element, scene.elements[index]);
+        assert.ok(
+          Math.abs(restored.elements[index].y - scene.elements[index].y) < 1e-9,
+        );
+        assert.ok(
+          Math.abs(
+            restored.elements[index].height - scene.elements[index].height,
+          ) < 1e-9,
+        );
+        if (element.type === "text") {
+          assert.equal(element.height, 64);
+          assert.equal(element.fontSize, 24);
+        }
+      }
+      const input = canvasLibrary(resized.elements);
+      input.designs[0].format = to;
+      assert.ok(parseLibrary(input));
+    }
+  }
+  assert.deepEqual(scene, original);
+});
+
+test("format resizing keeps tiny layers and extreme geometry within persistence bounds", () => {
+  const tiny: CanvasScene = {
+    background: "#fff",
+    elements: [
+      createCanvasElement("image", { height: 1 }),
+      createCanvasElement("shape", { height: 1 }),
+    ],
+  };
+  const smaller = resizeCanvasScene(tiny, "story", "square");
+  assert.ok(smaller.elements.every((element) => element.height === 1));
+  assert.ok(parseLibrary(canvasLibrary(smaller.elements)));
+  const large: CanvasScene = {
+    background: "#fff",
+    elements: [
+      createCanvasElement("image", { y: 10_000, height: 10_000 }),
+      createCanvasElement("shape", { y: -10_000, height: 10_000 }),
+      createCanvasElement("text", { y: 10_000, height: 10_000 }),
+    ],
+  };
+  const larger = resizeCanvasScene(large, "square", "story");
+  assert.deepEqual(
+    larger.elements.map((element) => element.y),
+    [10_000, -10_000, 10_000],
+  );
+  assert.ok(larger.elements.every((element) => element.height === 10_000));
+  assert.ok(parseLibrary(canvasLibrary(larger.elements)));
 });

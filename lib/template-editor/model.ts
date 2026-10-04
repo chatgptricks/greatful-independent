@@ -11,7 +11,57 @@ export const FORMATS: Record<
   story: { label: "Story", width: 1080, height: 1920 },
 };
 
-export type DesignPage = { id: string; image: StoryImage; style: SlideStyle };
+/** Scene coordinates and font sizes use a 360px-wide canvas at every format. */
+export type CanvasElementBase = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  opacity: number;
+  locked: boolean;
+};
+export type TextElement = CanvasElementBase & {
+  type: "text";
+  text: string;
+  font: string;
+  fontSize: number;
+  fontWeight: number;
+  italic: boolean;
+  underline: boolean;
+  color: string;
+  align: "left" | "center" | "right";
+  lineHeight: number;
+  letterSpacing: number;
+};
+export type ImageElement = CanvasElementBase & {
+  type: "image";
+  src: string;
+  fit: "cover" | "contain";
+  /** Object-position percentages, from 0 through 100; 50 centers the image. */
+  cropX: number;
+  cropY: number;
+  radius: number;
+};
+export type ShapeElement = CanvasElementBase & {
+  type: "shape";
+  shape: "rectangle" | "ellipse";
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+  radius: number;
+};
+export type CanvasElement = TextElement | ImageElement | ShapeElement;
+export type CanvasScene = { background: string; elements: CanvasElement[] };
+export type DesignPage = {
+  id: string;
+  image: StoryImage;
+  style: SlideStyle;
+  /** Absent on legacy pages until the editor explicitly adopts a scene. */
+  canvas?: CanvasScene;
+};
 export type DesignDocument = {
   id: string;
   name: string;
@@ -327,12 +377,364 @@ export const BUILT_IN_TEMPLATES: DesignTemplate[] = [
   },
 ];
 
+export function createCanvasElement<T extends CanvasElement["type"]>(
+  type: T,
+  options?: Partial<Omit<Extract<CanvasElement, { type: T }>, "type" | "id">>,
+): Extract<CanvasElement, { type: T }>;
+export function createCanvasElement(
+  type: CanvasElement["type"],
+  options: Partial<CanvasElement> = {},
+): CanvasElement {
+  const base = {
+    name: type === "text" ? "Text" : type === "image" ? "Image" : "Shape",
+    x: 36,
+    y: 60,
+    width: 288,
+    height: 90,
+    rotation: 0,
+    opacity: 1,
+    locked: false,
+  };
+  const defaults = {
+    text: {
+      text: "Your text",
+      font: "geist",
+      fontSize: 32,
+      fontWeight: 700,
+      italic: false,
+      underline: false,
+      color: DEFAULT_BRAND.text,
+      align: "left",
+      lineHeight: 1.2,
+      letterSpacing: 0,
+    },
+    image: {
+      height: 216,
+      src: "/template-editor/folds.svg",
+      fit: "cover",
+      cropX: 50,
+      cropY: 50,
+      radius: 0,
+    },
+    shape: {
+      width: 180,
+      height: 120,
+      shape: "rectangle",
+      fill: "#dce5d8",
+      stroke: DEFAULT_BRAND.text,
+      strokeWidth: 0,
+      radius: 0,
+    },
+  };
+  return {
+    ...base,
+    ...defaults[type],
+    ...options,
+    type,
+    id: crypto.randomUUID(),
+  } as CanvasElement;
+}
+
 export function duplicatePage(source: DesignPage): DesignPage {
   return {
     id: crypto.randomUUID(),
     image: { ...source.image, id: crypto.randomUUID() },
     style: { ...source.style },
+    ...(source.canvas
+      ? {
+          canvas: {
+            background: source.canvas.background,
+            elements: source.canvas.elements.map((element) => ({
+              ...element,
+              id: crypto.randomUUID(),
+            })),
+          },
+        }
+      : {}),
   };
+}
+
+/** Adapt scene coordinates between the three formats without stretching type. */
+export function resizeCanvasScene(
+  scene: CanvasScene,
+  from: DesignFormat,
+  to: DesignFormat,
+): CanvasScene {
+  const factor = FORMATS[to].height / FORMATS[from].height;
+  const clamp = (value: number, min: number, max: number) =>
+    Math.max(min, Math.min(max, value));
+  return {
+    ...scene,
+    elements: scene.elements.map((element) => ({
+      ...element,
+      y: clamp(element.y * factor, -10_000, 10_000),
+      ...(element.type !== "text"
+        ? { height: clamp(element.height * factor, 1, 10_000) }
+        : {}),
+    })),
+  };
+}
+
+/** Adapt a legacy composition only when requested. Existing documents remain
+ * untouched until the editor writes the returned scene. Stable migration IDs
+ * also make repeated previews deterministic before that first write. */
+export function sceneForPage(
+  page: DesignPage,
+  format: DesignFormat,
+): CanvasScene {
+  if (page.canvas) return page.canvas;
+  const style = page.style;
+  const width = 360;
+  const height = (width * FORMATS[format].height) / FORMATS[format].width;
+  const layout = style.template;
+  const scene: CanvasScene = {
+    background:
+      style.bgColor ??
+      (layout === "masonry"
+        ? "#f3eee3"
+        : layout === "quote"
+          ? "#0d0d0f"
+          : "#141417"),
+    elements: [],
+  };
+  const limit = (n: number, low: number, high: number) =>
+    Math.max(low, Math.min(high, n));
+  const id = (part: string) => `${page.id.slice(0, 80)}-canvas-${part}`;
+  const image = (
+    part: string,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    radius = 0,
+    opacity = style.mediaOpacity ?? 1,
+  ) => {
+    const element = createCanvasElement("image", {
+      name:
+        part === "image"
+          ? "Image"
+          : part === "backdrop"
+            ? "Backdrop"
+            : "Image panel",
+      x,
+      y,
+      width: w,
+      height: h,
+      src: page.image.url,
+      radius,
+      opacity,
+      cropX: limit(50 - (style.mediaInX ?? 0), 0, 100),
+      cropY: limit(50 - (style.mediaInY ?? 0), 0, 100),
+    });
+    element.id = id(part);
+    scene.elements.push(element);
+  };
+  const shade = (opacity: number) => {
+    const element = createCanvasElement("shape", {
+      name: "Image shading",
+      x: 0,
+      y: 0,
+      width,
+      height,
+      fill: "#000000",
+      stroke: "transparent",
+      opacity,
+    });
+    element.id = id("shade");
+    scene.elements.push(element);
+  };
+  const scale = style.textScale ?? 1;
+  const isCard = layout === "stacked" || layout === "blur";
+  const isQuote = layout === "quote";
+  const isCover = layout === "masonry";
+  const font = style.font ?? "libre";
+  const align =
+    style.align ??
+    (layout === "fullbleed" || layout === "split"
+      ? "bottom"
+      : isCover
+        ? "top"
+        : "center");
+  const textAlign =
+    style.textAlign ??
+    (layout === "overlay" || layout === "blur" || isCover ? "center" : "left");
+  const textColor = style.textColor ?? (isCover ? "#1c1a17" : "#ffffff");
+  const heading = style.heading ?? "";
+  const body = style.body ?? "";
+  const padding = isCard
+    ? layout === "blur"
+      ? 26
+      : 20
+    : isQuote
+      ? 24
+      : isCover
+        ? 26
+        : 22;
+  const textWidth = width - padding * 2;
+  const headSize = isCard
+    ? layout === "blur"
+      ? 18
+      : 20 * scale
+    : (isQuote ? 21 : isCover ? 29 : 22) * scale;
+  const bodySize = isCard
+    ? layout === "blur"
+      ? 12.5
+      : 13
+    : (isQuote ? 12 : isCover ? 13.5 : 13) * scale;
+  const headLine = isCard
+    ? layout === "blur"
+      ? 1.25
+      : 1.2
+    : (isQuote ? 1.34 : isCover ? 1.1 : 1.18) * (style.lineHeight ?? 1);
+  const bodyLine =
+    (isCover ? 1.45 : 1.5) * (isCard ? 1 : (style.lineHeight ?? 1));
+  const textHeight = (text: string, size: number, line: number) => {
+    if (!text) return 0;
+    const columns = Math.max(1, Math.floor(textWidth / (size * 0.52)));
+    const lines = text
+      .split("\n")
+      .reduce(
+        (count, paragraph) =>
+          count + Math.max(1, Math.ceil(paragraph.length / columns)),
+        0,
+      );
+    return Math.min(10_000, Math.ceil(lines * size * line + 2));
+  };
+  const headHeight = textHeight(heading, headSize, headLine);
+  const bodyHeight = textHeight(body, bodySize, bodyLine);
+  const gap = heading && body ? (isQuote ? 16 : isCard ? 8 : 10) : 0;
+  const quoteHeight = isQuote ? 37 : 0;
+  const blockHeight = headHeight + bodyHeight + gap + quoteHeight;
+  let textY =
+    align === "top"
+      ? padding
+      : align === "bottom"
+        ? height - blockHeight - padding
+        : (height - blockHeight) / 2;
+
+  if (isCard) {
+    const cardW = style.cardW ?? style.cardScale ?? 1;
+    const cardH = style.cardH ?? style.cardScale ?? 1;
+    const imageWidth = textWidth * (layout === "blur" ? 0.78 : 1) * cardW;
+    const imageHeight = textWidth * (layout === "blur" ? 0.78 : 0.75) * cardH;
+    const groupHeight = imageHeight + (blockHeight ? 14 + blockHeight : 0);
+    const start =
+      align === "top"
+        ? padding
+        : align === "bottom"
+          ? height - groupHeight - padding
+          : (height - groupHeight) / 2;
+    if (style.bgMode !== "color") {
+      image("backdrop", 0, 0, width, height, 0, 0.3);
+      shade(0.3);
+    }
+    image(
+      "image",
+      (width - imageWidth) / 2 + ((style.mediaX ?? 0) / 100) * imageWidth,
+      start + ((style.mediaY ?? 0) / 100) * imageHeight,
+      imageWidth,
+      imageHeight,
+      style.mediaRadius ?? (layout === "blur" ? 18 : 12),
+    );
+    textY = start + imageHeight + 14;
+  } else if (isCover) {
+    image(
+      "image",
+      width * 0.19,
+      height * 0.48,
+      width * 0.62,
+      width * 0.62 * 0.75,
+      16,
+    );
+  } else if (layout === "split") {
+    image("image", 0, 0, width / 2, height, style.mediaRadius ?? 0);
+    image("image-right", width / 2, 0, width / 2, height);
+    shade(0.32);
+  } else if (layout !== "text" && !isQuote) {
+    const imageWidth = (width * (style.mediaW ?? 100)) / 100;
+    const imageHeight = (height * (style.mediaH ?? 100)) / 100;
+    image(
+      "image",
+      (width - imageWidth) / 2 + (width * (style.mediaX ?? 0)) / 100,
+      (height - imageHeight) / 2 + (height * (style.mediaY ?? 0)) / 100,
+      imageWidth,
+      imageHeight,
+      style.mediaRadius ?? 0,
+    );
+    if (layout === "overlay") shade(0.42);
+    if (layout === "fullbleed") shade(0.28);
+  } else if (style.bgMode === "blur") {
+    image("backdrop", 0, 0, width, height, 0, 0.3);
+    shade(0.3);
+  }
+
+  const x = limit(
+    padding + (width * (style.textX ?? 0)) / 100,
+    -10_000,
+    10_000,
+  );
+  textY = limit(
+    textY + (blockHeight * (style.textY ?? 0)) / 100,
+    -10_000,
+    10_000,
+  );
+  const text = (
+    part: string,
+    content: string,
+    y: number,
+    h: number,
+    fontSize: number,
+    lineHeight: number,
+    opacity = style.textOpacity ?? 1,
+  ) => {
+    if (!content) return;
+    const element = createCanvasElement("text", {
+      name:
+        part === "heading"
+          ? "Heading"
+          : part === "body"
+            ? "Body"
+            : "Quote mark",
+      text: content,
+      x,
+      y: limit(y, -10_000, 10_000),
+      width: textWidth,
+      height: Math.max(1, h),
+      font,
+      fontSize,
+      fontWeight:
+        part === "heading" && !isQuote ? (style.fontWeight ?? 600) : 400,
+      color: textColor,
+      align: textAlign,
+      lineHeight,
+      opacity,
+      letterSpacing: (style.letterSpacing ?? 0) * fontSize,
+    });
+    element.id = id(part);
+    scene.elements.push(element);
+  };
+  if (layout !== "plain") {
+    if (isQuote)
+      text("quote", "“", textY, 37, 54, 0.7, (style.textOpacity ?? 1) * 0.85);
+    text(
+      "heading",
+      heading,
+      textY + quoteHeight,
+      headHeight,
+      headSize,
+      headLine,
+    );
+    text(
+      "body",
+      body,
+      textY + quoteHeight + headHeight + gap,
+      bodyHeight,
+      bodySize,
+      bodyLine,
+      (style.textOpacity ?? 1) * (isQuote ? 0.68 : 0.92),
+    );
+  }
+  return scene;
 }
 
 export function createDesign(template: DesignTemplate): DesignDocument {
@@ -349,19 +751,19 @@ export function createDesign(template: DesignTemplate): DesignDocument {
   };
 }
 
-export function createBlankTemplateDesign(
+export function createBlankDesign(
   name: string,
   format: DesignFormat,
 ): DesignDocument {
-  return {
-    ...createDesign({
-      id: "blank-template",
-      name: name.trim() || "Untitled template",
-      description: "",
-      category: "My templates",
-      format,
-      pages: [
-        page("blank-template", "folds", {
+  return createDesign({
+    id: "blank-design",
+    name: name.trim() || "Untitled design",
+    description: "",
+    category: "My templates",
+    format,
+    pages: [
+      {
+        ...page("blank-design", "folds", {
           template: "text",
           heading: "",
           body: "",
@@ -372,8 +774,19 @@ export function createBlankTemplateDesign(
           align: "center",
           textAlign: "left",
         }),
-      ],
-    }),
+        canvas: { background: DEFAULT_BRAND.background, elements: [] },
+      },
+    ],
+  });
+}
+
+export function createBlankTemplateDesign(
+  name: string,
+  format: DesignFormat,
+): DesignDocument {
+  return {
+    ...createBlankDesign(name.trim() || "Untitled template", format),
+    templateId: "blank-template",
     purpose: "template",
   };
 }
@@ -682,6 +1095,121 @@ function safeImageUrl(value: unknown): value is string {
   }
 }
 
+const numberIn = (value: unknown, min: number, max: number): value is number =>
+  typeof value === "number" &&
+  Number.isFinite(value) &&
+  value >= min &&
+  value <= max;
+
+function parseCanvas(value: unknown): CanvasScene | null {
+  if (
+    !object(value) ||
+    !color(value.background) ||
+    !Array.isArray(value.elements) ||
+    value.elements.length > 100
+  )
+    return null;
+  const scene: CanvasScene = { background: value.background, elements: [] };
+  const ids = new Set<string>();
+  for (const element of value.elements) {
+    if (
+      !object(element) ||
+      !identity(element.id) ||
+      ids.has(element.id) ||
+      !string(element.name, 200) ||
+      !numberIn(element.x, -10_000, 10_000) ||
+      !numberIn(element.y, -10_000, 10_000) ||
+      !numberIn(element.width, 1, 10_000) ||
+      !numberIn(element.height, 1, 10_000) ||
+      !numberIn(element.rotation, -3600, 3600) ||
+      !numberIn(element.opacity, 0, 1) ||
+      typeof element.locked !== "boolean"
+    )
+      return null;
+    const base: CanvasElementBase = {
+      id: element.id,
+      name: element.name,
+      x: element.x,
+      y: element.y,
+      width: element.width,
+      height: element.height,
+      rotation: element.rotation,
+      opacity: element.opacity,
+      locked: element.locked,
+    };
+    if (element.type === "text") {
+      if (
+        !string(element.text, 20_000) ||
+        typeof element.font !== "string" ||
+        !FONT_IDS.has(element.font) ||
+        !numberIn(element.fontSize, 1, 500) ||
+        !numberIn(element.fontWeight, 100, 900) ||
+        typeof element.italic !== "boolean" ||
+        typeof element.underline !== "boolean" ||
+        !color(element.color) ||
+        !numberIn(element.lineHeight, 0.5, 5) ||
+        !numberIn(element.letterSpacing, -20, 100) ||
+        (element.align !== "left" &&
+          element.align !== "center" &&
+          element.align !== "right")
+      )
+        return null;
+      scene.elements.push({
+        ...base,
+        type: "text",
+        text: element.text,
+        font: element.font,
+        fontSize: element.fontSize,
+        fontWeight: element.fontWeight,
+        italic: element.italic,
+        underline: element.underline,
+        color: element.color,
+        align: element.align,
+        lineHeight: element.lineHeight,
+        letterSpacing: element.letterSpacing,
+      });
+    } else if (element.type === "image") {
+      if (
+        !safeImageUrl(element.src) ||
+        (element.fit !== "cover" && element.fit !== "contain") ||
+        !numberIn(element.cropX, 0, 100) ||
+        !numberIn(element.cropY, 0, 100) ||
+        !numberIn(element.radius, 0, 5000)
+      )
+        return null;
+      scene.elements.push({
+        ...base,
+        type: "image",
+        src: element.src,
+        fit: element.fit,
+        cropX: element.cropX,
+        cropY: element.cropY,
+        radius: element.radius,
+      });
+    } else if (element.type === "shape") {
+      if (
+        (element.shape !== "rectangle" && element.shape !== "ellipse") ||
+        !color(element.fill) ||
+        !color(element.stroke) ||
+        !numberIn(element.strokeWidth, 0, 200) ||
+        !numberIn(element.radius, 0, 5000)
+      )
+        return null;
+      scene.elements.push({
+        ...base,
+        type: "shape",
+        shape: element.shape,
+        fill: element.fill,
+        stroke: element.stroke,
+        strokeWidth: element.strokeWidth,
+        radius: element.radius,
+      });
+    } else return null;
+    ids.add(element.id);
+  }
+  return scene;
+}
+
 function parsePages(value: unknown): DesignPage[] | null {
   if (!Array.isArray(value) || !value.length || value.length > 20) return null;
   const pages: DesignPage[] = [];
@@ -712,6 +1240,8 @@ function parsePages(value: unknown): DesignPage[] | null {
       return null;
     const style = parseStyle(p.style);
     if (!style) return null;
+    const canvas = p.canvas === undefined ? undefined : parseCanvas(p.canvas);
+    if (canvas === null) return null;
     const source: StoryImage["source"] = [
       "google",
       "pinterest",
@@ -726,6 +1256,7 @@ function parsePages(value: unknown): DesignPage[] | null {
     pages.push({
       id: p.id,
       style,
+      ...(canvas ? { canvas } : {}),
       image: {
         id: image.id,
         url: image.url,

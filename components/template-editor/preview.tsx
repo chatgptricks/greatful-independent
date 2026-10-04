@@ -1,17 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import {
-  SlideFrame,
-  type SlideElement,
-} from "@/components/grateful-future/slide-templates";
+import { SlideFrame } from "@/components/grateful-future/slide-templates";
 import {
   FORMATS,
   storyForDesign,
   type DesignDocument,
   type DesignPage,
 } from "@/lib/template-editor/model";
-import type { SlideStyle } from "@/lib/grateful-future/types";
+import { SceneRenderer } from "./canvas";
 
 /** A single canonical layout size makes thumbnails, canvas and exports agree. */
 export const FRAME_WIDTH = 360;
@@ -19,15 +16,9 @@ export const FRAME_WIDTH = 360;
 export function DesignFrame({
   design,
   page,
-  onSet,
-  selected,
-  onSelect,
 }: {
   design: DesignDocument;
   page: DesignPage;
-  onSet?: (patch: Partial<SlideStyle>) => void;
-  selected?: SlideElement | null;
-  onSelect?: (element: SlideElement) => void;
 }) {
   const format = FORMATS[design.format];
   return (
@@ -38,16 +29,17 @@ export function DesignFrame({
         height: (FRAME_WIDTH * format.height) / format.width,
       }}
     >
-      <SlideFrame
-        img={page.image}
-        style={page.style}
-        story={storyForDesign(design)}
-        gallery={design.pages.map((p) => p.image)}
-        index={design.pages.findIndex((p) => p.id === page.id)}
-        onSet={onSet}
-        selected={selected}
-        onSelect={onSelect}
-      />
+      {page.canvas ? (
+        <SceneRenderer scene={page.canvas} />
+      ) : (
+        <SlideFrame
+          img={page.image}
+          style={page.style}
+          story={storyForDesign(design)}
+          gallery={design.pages.map((p) => p.image)}
+          index={design.pages.findIndex((p) => p.id === page.id)}
+        />
+      )}
     </div>
   );
 }

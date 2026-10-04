@@ -1,24 +1,32 @@
 # Greatful Template Studio
 
-A template-first editor for creating social posts and carousels. Start with a defined design, edit the content and imagery on canvas, and save your own reusable templates.
+A visual canvas editor for creating social posts, carousels, and reusable templates. Start blank or choose a defined design, then arrange independent text, image, and shape layers directly on the canvas.
 
 This repository is an independent copy with its own Git history. Configure service accounts and environment variables for this copy; do not reuse credentials, databases, or deployments from the source project.
 
-Built with Next.js 16, React 19, and Tailwind v4. The editor reuses the established Grateful Future slide renderer, fonts, rich-text editing, and image handling.
+Built with Next.js 16, React 19, and Tailwind v4. The editor retains the established Greatful fonts, artwork, image handling, authentication, and persistence. One shared canvas renderer powers editing, library previews, and PNG exports.
 
 ## Create a post
 
-1. Pick one of eight built-in templates, or start from **My templates**. The library includes editorial posts, quotes, announcements, stories, and four- and five-page carousels.
-2. Edit the heading, body, and caption. Double-click canvas text for inline editing; drag text or images to reposition them. Adjust fonts, colors, spacing, image crop, opacity, and page layout.
+1. Choose **New design** for a blank canvas, pick one of eight built-in templates, or start from **My templates**.
+2. Add independent text boxes, images, rectangles, circles, or lines. Double-click text to type directly; drag to move, use handles to resize, and rotate with the rotation handle. Center guides help align objects. Shift-click selects several elements together.
 3. Add, duplicate, reorder, or remove pages. Undo and redo changes while the design is open. Save a font and color palette in **Brand kit**, then apply it to every page.
 4. Use **Save as template** to keep the complete design as a starting point for future posts. Copies receive independent page and image identities.
 5. Export the current page as PNG, or all pages as a ZIP containing numbered PNGs and the post caption when present. Captions can also be downloaded separately as TXT.
 
 ## Build your own template
 
-Choose **Create template**, enter a name, and select portrait, square, or Story format. The editor opens an empty canvas with a text-only layout. Write your own heading and body, set typography and colors, upload an image, and add or arrange pages manually. Uploading an image to a text-only page switches it to a full-bleed layout so the image is visible immediately.
+Choose **Create template**, enter a name, and select portrait, square, or Story format. The editor opens an empty canvas. Add text boxes, images, and shapes, position each element, and arrange pages manually. Uploaded images become independent layers and can also replace a selected image.
 
 Template drafts autosave and can be resumed from **My templates** or **Your designs**. **Save template** places the finished template in **My templates**. Use a custom template's **Edit template** action to reopen it, then **Update template** to replace that template. Existing posts remain independent of future template edits.
+
+## Canvas tools
+
+Select an element to open contextual properties: font, size, bold, italic, underline, uppercase/lowercase, text alignment, letter and line spacing, colors, opacity, rotation, and exact position and dimensions. Image controls include fill/fit, crop position, and corner radius; shapes include fill, border, and radius. Alignment actions place objects against page edges or center. Layers can be reordered, locked, duplicated, or deleted. Properties display output pixels; the renderer uses a canonical 360 px canvas and exports at 3×.
+
+Use **T** to add text, **R** for a rectangle, **O** for a circle, **⌘/Ctrl+D** to duplicate, **⌘/Ctrl+C/V** to copy/paste elements, arrow keys to nudge, and **⌘/Ctrl+Z** to undo. The shortcut dialog lists the complete set. Text entry keeps normal typing and clipboard behavior. Images can be uploaded, dropped, or pasted into the workspace.
+
+Older pages keep their original appearance. Choose **Edit individual elements** to convert a page to layers; Undo restores it. New posts from templates start with editable layers. Original legacy fields stay with each page. Legacy photo gradients and blur treatments become editable backdrop/shading layers; research rendering is unchanged.
 
 | Format | Export size |
 |---|---|
@@ -28,7 +36,7 @@ Template drafts autosave and can be resumed from **My templates** or **Your desi
 
 Upload JPG, PNG, or WebP images up to 15 MB. The editor resizes uploads to a maximum dimension of 1800 px, compresses them, and saves the resulting image with the design. The built-in template artwork lives in this repository and needs no external image service.
 
-The current editor supports up to 20 pages per design, 150 designs, and 80 custom templates. The complete save request has a 12 MB limit; embedded images count toward it. This editor exports still images. The preserved research workspace retains its existing video tools.
+The current editor supports up to 100 elements per page, 20 pages per design, 150 designs, and 80 custom templates. The complete save request has a 12 MB limit; embedded images count toward it. This editor exports still images. The preserved research workspace retains its existing video tools.
 
 ## Run locally
 

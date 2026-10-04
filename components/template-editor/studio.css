@@ -3,10 +3,10 @@
   --te-surface: #171719;
   color-scheme: dark;
 }
-.te-root button,
-.te-root input,
-.te-root textarea,
-.te-root select {
+:where(.te-root) button,
+:where(.te-root) input,
+:where(.te-root) textarea,
+:where(.te-root) select {
   font: inherit;
 }
 .te-root button {
@@ -597,6 +597,16 @@
 .te-color-field code {
   font-size: 9px;
   color: #777;
+}
+.te-color-field input.te-color-hex {
+  width: 69px;
+  height: 26px;
+  padding: 3px 5px;
+  border: 1px solid #ffffff16;
+  border-radius: 4px;
+  color: #a9a9b1;
+  font: 10px/1.2 ui-monospace, monospace;
+  cursor: text;
 }
 .te-help {
   font-size: 10px;
