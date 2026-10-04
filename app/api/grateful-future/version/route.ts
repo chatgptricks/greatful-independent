@@ -4,7 +4,7 @@
  * for verifying that a push landed (a failed Vercel build keeps serving the
  * previous deployment, silently).
  */
-export const GF_BUILD = "2026-10-04-context-menus-brand-kits";
+export const GF_BUILD = "2026-10-04-continuous-carousel-workspace";
 
 export function GET() {
   return Response.json({ build: GF_BUILD, commit: process.env.RENDER_GIT_COMMIT ?? null }, { headers: { "Cache-Control": "no-store" } });

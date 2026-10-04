@@ -64,6 +64,65 @@
 .te-canvas-editor > .te-canvas-scene {
   pointer-events: none;
 }
+.te-canvas-editor-scene {
+  overflow: visible;
+}
+.te-canvas-pasteboard-hit {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+}
+.te-canvas-onion-skin {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+.te-canvas-page-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.te-canvas-page-layer.is-clipped {
+  overflow: hidden;
+}
+.te-canvas-page-layer.is-editing {
+  z-index: 2;
+}
+.te-canvas-slide-guides {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.te-canvas-slide-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.te-canvas-slide-label {
+  position: absolute;
+  top: -28px;
+  left: 8px;
+  padding: 3px 7px;
+  border: 1px solid #ffffff30;
+  border-radius: 4px;
+  background: #24232d;
+  color: #fff;
+  font: 500 10px/15px system-ui, sans-serif;
+  white-space: nowrap;
+}
+.te-canvas-slide-seam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-left: 1px dashed #ffffffd9;
+  box-shadow: -1px 0 0 #24232d80, 1px 0 0 #24232d80;
+}
 .te-canvas-hit-area {
   position: absolute;
   inset: 0;
@@ -259,6 +318,7 @@
 
 .te-canvas-edit-box {
   z-index: 2;
+  pointer-events: auto;
 }
 .te-canvas-edit-text {
   cursor: text;

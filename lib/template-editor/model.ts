@@ -22,6 +22,8 @@ export type CanvasElementBase = {
   rotation: number;
   opacity: number;
   locked: boolean;
+  /** Hidden layers remain editable in the layer list but are omitted from artwork. */
+  hidden?: boolean;
 };
 export type TextElement = CanvasElementBase & {
   type: "text";
@@ -68,6 +70,8 @@ export type DesignDocument = {
   templateId: string;
   format: DesignFormat;
   pages: DesignPage[];
+  /** One wide scene spanning all slides; ordinary pages remain the slide metadata. */
+  continuousCanvas?: CanvasScene;
   caption: string;
   createdAt: string;
   updatedAt: string;
@@ -83,6 +87,7 @@ export type DesignTemplate = {
   category: string;
   format: DesignFormat;
   pages: DesignPage[];
+  continuousCanvas?: CanvasScene;
   custom?: boolean;
 };
 export type BrandKit = {
@@ -495,6 +500,10 @@ export function createCanvasElement(
   } as CanvasElement;
 }
 
+function duplicateCanvasScene(source: CanvasScene): CanvasScene {
+  return { background: source.background, elements: source.elements.map(element => ({ ...element, id: crypto.randomUUID() })) };
+}
+
 export function duplicatePage(source: DesignPage): DesignPage {
   return {
     id: crypto.randomUUID(),
@@ -502,13 +511,7 @@ export function duplicatePage(source: DesignPage): DesignPage {
     style: { ...source.style },
     ...(source.canvas
       ? {
-          canvas: {
-            background: source.canvas.background,
-            elements: source.canvas.elements.map((element) => ({
-              ...element,
-              id: crypto.randomUUID(),
-            })),
-          },
+          canvas: duplicateCanvasScene(source.canvas),
         }
       : {}),
   };
@@ -805,6 +808,7 @@ export function createDesign(template: DesignTemplate): DesignDocument {
     templateId: template.id,
     format: template.format,
     pages: template.pages.map(duplicatePage),
+    ...(template.continuousCanvas ? { continuousCanvas: duplicateCanvasScene(template.continuousCanvas) } : {}),
     caption: "",
     createdAt: now,
     updatedAt: now,
@@ -866,6 +870,7 @@ export function cloneDesign(design: DesignDocument): DesignDocument {
     id: crypto.randomUUID(),
     name: `${design.name} copy`,
     pages: design.pages.map(duplicatePage),
+    ...(design.continuousCanvas ? { continuousCanvas: duplicateCanvasScene(design.continuousCanvas) } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -885,6 +890,7 @@ export function designAsTemplate(
     category: "My templates",
     format: design.format,
     pages: design.pages.map(duplicatePage),
+    ...(design.continuousCanvas ? { continuousCanvas: duplicateCanvasScene(design.continuousCanvas) } : {}),
     custom: true,
   };
 }
@@ -1213,7 +1219,8 @@ function parseCanvas(value: unknown): CanvasScene | null {
       !numberIn(element.height, 1, 10_000) ||
       !numberIn(element.rotation, -3600, 3600) ||
       !numberIn(element.opacity, 0, 1) ||
-      typeof element.locked !== "boolean"
+      typeof element.locked !== "boolean" ||
+      (element.hidden !== undefined && typeof element.hidden !== "boolean")
     )
       return null;
     const base: CanvasElementBase = {
@@ -1226,6 +1233,7 @@ function parseCanvas(value: unknown): CanvasScene | null {
       rotation: element.rotation,
       opacity: element.opacity,
       locked: element.locked,
+      ...(typeof element.hidden === "boolean" ? { hidden: element.hidden } : {}),
     };
     if (element.type === "text") {
       if (
@@ -1430,12 +1438,15 @@ export function parseLibrary(input: unknown): EditorLibrary | null {
         return null;
       const pages = parsePages(d.pages);
       if (!pages) return null;
+      const continuousCanvas = d.continuousCanvas === undefined ? undefined : parseCanvas(d.continuousCanvas);
+      if (d.continuousCanvas !== undefined && (!continuousCanvas || pages.length < 2)) return null;
       library.designs.push({
         id: d.id,
         name: d.name,
         templateId: d.templateId,
         format: d.format,
         pages,
+        ...(continuousCanvas ? { continuousCanvas } : {}),
         caption: d.caption,
         createdAt: d.createdAt,
         updatedAt: d.updatedAt,
@@ -1459,6 +1470,8 @@ export function parseLibrary(input: unknown): EditorLibrary | null {
         return null;
       const pages = parsePages(t.pages);
       if (!pages) return null;
+      const continuousCanvas = t.continuousCanvas === undefined ? undefined : parseCanvas(t.continuousCanvas);
+      if (t.continuousCanvas !== undefined && (!continuousCanvas || pages.length < 2)) return null;
       library.templates.push({
         id: t.id,
         name: t.name,
@@ -1466,6 +1479,7 @@ export function parseLibrary(input: unknown): EditorLibrary | null {
         category: t.category,
         format: t.format,
         pages,
+        ...(continuousCanvas ? { continuousCanvas } : {}),
         custom: true,
       });
       templateIds.add(t.id);

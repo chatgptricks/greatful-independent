@@ -17,6 +17,7 @@ import {
   createDesign,
   createBlankTemplateDesign,
   createBlankDesign,
+  duplicatePage,
   sceneForPage,
   editTemplateDesign,
   cloneDesign,
@@ -30,6 +31,7 @@ import {
 } from "@/lib/template-editor/model";
 import { useEditorLibrary } from "@/lib/template-editor/use-library";
 import { saveBlob } from "@/lib/template-editor/export";
+import { enableContinuousCarousel } from "@/lib/template-editor/continuous-carousel";
 import { GF_FONT_VARS } from "@/app/admin/(tool)/grateful-future/fonts";
 import { DesignPreview } from "./preview";
 import { DesignEditor } from "./design-editor";
@@ -58,6 +60,7 @@ export function templatePreview(template: DesignTemplate): DesignDocument {
     templateId: template.id,
     format: template.format,
     pages: template.pages,
+    ...(template.continuousCanvas ? { continuousCanvas: template.continuousCanvas } : {}),
     caption: "",
     createdAt: "",
     updatedAt: "",
@@ -92,6 +95,8 @@ export default function TemplateStudio() {
   const [newTemplate, setNewTemplate] = useState<{
     name: string;
     format: DesignFormat;
+    layout?: "separate" | "continuous";
+    pageCount?: number;
   } | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const permission = useRef(canEdit);
@@ -825,10 +830,17 @@ export default function TemplateStudio() {
                 library.templates.length >= 80
               )
                 return;
-              const document = createBlankTemplateDesign(
+              let document = createBlankTemplateDesign(
                 newTemplate.name.trim() || "Untitled template",
                 newTemplate.format,
               );
+              if (newTemplate.layout === "continuous") {
+                const count = Math.max(2, Math.min(20, Math.floor(newTemplate.pageCount ?? 2)));
+                document = enableContinuousCarousel({
+                  ...document,
+                  pages: [document.pages[0], ...Array.from({ length: count - 1 }, () => duplicatePage(document.pages[0]))],
+                });
+              }
               const accepted = addDocument(document);
               if (accepted === false) return;
               setActiveId(document.id);
@@ -836,8 +848,8 @@ export default function TemplateStudio() {
             }}
           >
             <p>
-              Start with an empty canvas. Add your own text, images, colors, and
-              pages to build a reusable template.
+              Start with an empty canvas. Build individual slides, or one
+              continuous composition with images that span across slides.
             </p>
             <label className="te-field">
               Template name
@@ -881,6 +893,28 @@ export default function TemplateStudio() {
                 </label>
               ))}
             </fieldset>
+            <fieldset className="te-format-options" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))", marginTop: 20 }}>
+              <legend>Canvas layout</legend>
+              <label className={newTemplate.layout !== "continuous" ? "is-active" : ""}>
+                <input type="radio" name="template-layout" value="separate" checked={newTemplate.layout !== "continuous"} onChange={() => setNewTemplate({ ...newTemplate, layout: "separate" })} />
+                <LayoutIcon size={24} />
+                <strong>Separate slides</strong>
+                <small>Design each slide on its own</small>
+              </label>
+              <label className={newTemplate.layout === "continuous" ? "is-active" : ""}>
+                <input type="radio" name="template-layout" value="continuous" checked={newTemplate.layout === "continuous"} onChange={() => setNewTemplate({ ...newTemplate, layout: "continuous", pageCount: newTemplate.pageCount ?? 2 })} />
+                <svg width="42" height="24" viewBox="0 0 42 24" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden><rect x="1" y="2" width="40" height="20" rx="2" /><path d="M14 2v20m14-20v20" strokeDasharray="2 2" /><path d="m5 18 10-10 10 8 8-6 4 4" /></svg>
+                <strong>Continuous carousel</strong>
+                <small>One wide canvas across slides</small>
+              </label>
+            </fieldset>
+            {newTemplate.layout === "continuous" && <label className="te-field" style={{ marginTop: 18 }}>
+              Number of slides
+              <select aria-label="Number of carousel slides" value={newTemplate.pageCount ?? 2} onChange={(event) => setNewTemplate({ ...newTemplate, pageCount: Number(event.target.value) })}>
+                {Array.from({ length: 19 }, (_, index) => index + 2).map((count) => <option key={count} value={count}>{count} slides</option>)}
+              </select>
+              <span className="te-field-note">Export creates a separate {FORMATS[newTemplate.format].width} × {FORMATS[newTemplate.format].height} PNG for every slide.</span>
+            </label>}
             <div className="te-modal-actions">
               <button
                 className="te-button"

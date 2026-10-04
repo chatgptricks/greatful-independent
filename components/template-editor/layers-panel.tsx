@@ -1,0 +1,205 @@
+"use client";
+
+import { useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { CopyIcon, SearchIcon, TrashIcon } from "@/components/grateful-future/icons";
+import type { CanvasElement, CanvasScene } from "@/lib/template-editor/model";
+import { elementIntersectsCanvas } from "@/lib/template-editor/canvas-geometry";
+import { reorderSelection } from "@/lib/template-editor/commands";
+import { proxied } from "@/lib/grateful-future/util";
+import "./layers-panel.css";
+
+export type LayersPanelProps = {
+  scene: CanvasScene;
+  selectedIds: string[];
+  onSelect: (ids: string[]) => void;
+  onChange: (scene: CanvasScene, group?: string) => boolean | void;
+  width: number;
+  height: number;
+  disabled?: boolean;
+  onContextMenu: (event: MouseEvent, element: CanvasElement) => void;
+  onMenuClick?: (event: MouseEvent, element: CanvasElement) => void;
+  onDuplicate?: () => void;
+  onDelete?: () => void;
+  onLocate?: (element: CanvasElement) => void;
+};
+
+function typeName(element: CanvasElement) {
+  return element.type === "text" ? "Text" : element.type === "image" ? "Image" : element.shape === "ellipse" ? "Ellipse" : "Rectangle";
+}
+function layerName(element: CanvasElement) {
+  return element.name.trim() || (element.type === "text" ? element.text.trim().slice(0, 40) : "") || typeName(element);
+}
+function Eye({ hidden }: { hidden: boolean }) {
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" />{hidden && <path d="m3 3 18 18" />}
+  </svg>;
+}
+function Lock({ locked }: { locked: boolean }) {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden>
+    <rect x="5" y="10" width="14" height="11" rx="2" /><path d={locked ? "M8 10V6a4 4 0 0 1 8 0v4" : "M8 10V6a4 4 0 0 1 8 0"} />
+  </svg>;
+}
+function Arrow({ down = false }: { down?: boolean }) {
+  return <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={down ? "M12 4v16m-5-5 5 5 5-5" : "M12 20V4m-5 5 5-5 5 5"} /></svg>;
+}
+function Locate() {
+  return <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden><circle cx="12" cy="12" r="6" /><path d="M12 2v5m0 10v5M2 12h5m10 0h5" /></svg>;
+}
+function Thumbnail({ element }: { element: CanvasElement }) {
+  return <span className={`te-layer-thumb te-layer-thumb-${element.type}`} aria-hidden>
+    {element.type === "image" ? (
+      // Reuse the same proxy as the canvas; never inline remote SVG markup.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={proxied(element.src)} alt="" draggable={false} style={{ objectPosition: `${element.cropX}% ${element.cropY}%` }} />
+    ) : element.type === "text" ? <span className={`gf-font-${element.font}`} style={{ color: element.color, fontWeight: element.fontWeight, fontStyle: element.italic ? "italic" : "normal" }}>{element.text.trim().slice(0, 2) || "T"}</span> : <span className="te-layer-shape-preview" style={{ background: element.fill, border: element.strokeWidth ? `1px solid ${element.stroke}` : undefined, borderRadius: element.shape === "ellipse" ? "50%" : Math.min(7, element.radius), aspectRatio: `${element.width}/${element.height}` }} />}
+  </span>;
+}
+
+export function LayersPanel({ scene, selectedIds, onSelect, onChange, width, height, disabled = false, onContextMenu, onMenuClick, onDuplicate, onDelete, onLocate }: LayersPanelProps) {
+  const [query, setQuery] = useState("");
+  const [rename, setRename] = useState<{ id: string; value: string } | null>(null);
+  const [renameError, setRenameError] = useState("");
+  const cancelledRename = useRef(false);
+  const [dragging, setDragging] = useState<string[]>([]);
+  const dragIds = useRef<string[]>([]);
+  const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  const selectedSet = new Set(selectedIds);
+  const selected = scene.elements.filter((element) => selectedSet.has(element.id));
+  const unlocked = selected.filter((element) => !element.locked);
+  const order = [...scene.elements].reverse();
+  const search = query.trim().toLowerCase();
+  const filtered = order.filter((element) => !search || `${element.name} ${typeName(element)} ${element.type === "text" ? element.text : ""}`.toLowerCase().includes(search));
+  const moveUp = reorderSelection(scene, selectedIds, "forward");
+  const moveDown = reorderSelection(scene, selectedIds, "backward");
+
+  function toggle(id: string, key: "locked" | "hidden") {
+    if (disabled) return;
+    const source = scene.elements.find((element) => element.id === id);
+    if (!source) return;
+    const value = !source[key];
+    const accepted = onChange({ ...scene, elements: scene.elements.map((element) => element.id === id ? { ...element, [key]: value } : element) });
+    if (accepted !== false) setAnnouncement(`${layerName(source)} ${key === "locked" ? value ? "locked" : "unlocked" : value ? "hidden" : "shown"}.`);
+  }
+  function beginRename(element: CanvasElement) {
+    if (disabled || element.locked) return;
+    cancelledRename.current = false;
+    setRenameError("");
+    setRename({ id: element.id, value: element.name });
+  }
+  function finishRename() {
+    if (!rename) return;
+    if (cancelledRename.current) { setRename(null); return; }
+    const source = scene.elements.find((element) => element.id === rename.id);
+    if (disabled || !source || source.locked) { setRenameError("Unlock the layer before renaming it."); return; }
+    const name = rename.value.trim() || typeName(source);
+    if (name === source.name) { setRename(null); return; }
+    const accepted = onChange({ ...scene, elements: scene.elements.map((element) => element.id === rename.id ? { ...element, name } : element) }, `rename-layer:${rename.id}`);
+    if (accepted === false) { setRenameError("Name not saved. Check the workspace save message."); return; }
+    setRename(null); setRenameError(""); setAnnouncement(`Layer renamed to ${name}.`);
+  }
+  function choose(element: CanvasElement, extend: boolean) {
+    if (disabled) return;
+    onSelect(extend ? selectedSet.has(element.id) ? selectedIds.filter((id) => id !== element.id) : [...selectedIds, element.id] : [element.id]);
+  }
+  function shift(direction: "up" | "down") {
+    if (disabled) return;
+    const result = direction === "up" ? moveUp : moveDown;
+    if (result.scene !== scene && onChange(result.scene) !== false) setAnnouncement(`${unlocked.length === 1 ? "Layer" : "Layers"} moved ${direction}.`);
+  }
+  function startDrag(event: DragEvent, element: CanvasElement) {
+    if (disabled || element.locked || rename) { event.preventDefault(); return; }
+    const ids = selectedSet.has(element.id) ? unlocked.map((item) => item.id) : [element.id];
+    if (!selectedSet.has(element.id)) onSelect(ids);
+    dragIds.current = ids; setDragging(ids);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-greatful-layers", "move");
+    event.dataTransfer.setData("text/plain", `${ids.length} layer${ids.length === 1 ? "" : "s"}`);
+  }
+  function endDrag() { dragIds.current = []; setDragging([]); setDropTarget(null); }
+  function dragOver(event: DragEvent<HTMLElement>, element: CanvasElement) {
+    if (disabled || !dragIds.current.length || dragIds.current.includes(element.id)) return;
+    event.preventDefault(); event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    const bounds = event.currentTarget.getBoundingClientRect();
+    setDropTarget({ id: element.id, after: event.clientY > bounds.top + bounds.height / 2 });
+  }
+  function drop(event: DragEvent<HTMLElement>, element: CanvasElement) {
+    event.preventDefault(); event.stopPropagation();
+    const ids = new Set(dragIds.current);
+    const moving = order.filter((item) => ids.has(item.id) && !item.locked);
+    if (disabled || !moving.length || ids.has(element.id)) { endDrag(); return; }
+    const remaining = order.filter((item) => !moving.some((layer) => layer.id === item.id));
+    const index = remaining.findIndex((item) => item.id === element.id);
+    if (index < 0) { endDrag(); return; }
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const after = event.clientY > bounds.top + bounds.height / 2;
+    const next = [...remaining.slice(0, index + Number(after)), ...moving, ...remaining.slice(index + Number(after))].reverse();
+    if (next.some((item, i) => item.id !== scene.elements[i].id) && onChange({ ...scene, elements: next }) !== false) {
+      onSelect(moving.map((item) => item.id));
+      setAnnouncement(`${moving.length === 1 ? "Layer" : `${moving.length} layers`} reordered.`);
+    }
+    endDrag();
+  }
+
+  return <section className="te-layer-manager" aria-label="Manage layers">
+    <header className="te-panel-heading"><h2>Layers</h2><span>{scene.elements.length}/100</span></header>
+    <label className="te-layer-search"><SearchIcon size={14} /><input aria-label="Search layers" placeholder="Find a layer…" value={query} onChange={(event) => setQuery(event.target.value)} />{query && <button type="button" aria-label="Clear layer search" onClick={() => setQuery("")}>×</button>}</label>
+    <div className="te-layer-selection-summary">
+      <span>{selected.length ? `${selected.length} selected` : `${filtered.length} ${filtered.length === 1 ? "layer" : "layers"}`}</span>
+      <button type="button" disabled={disabled || !filtered.length} onClick={() => onSelect(filtered.map((element) => element.id))}>Select {query ? "results" : "all"}</button>
+      {selected.length > 0 && <button type="button" disabled={disabled} onClick={() => onSelect([])}>Clear</button>}
+    </div>
+    <div className="te-layer-toolbar" role="group" aria-label="Selected layer actions">
+      <button type="button" disabled={disabled || moveUp.scene === scene} aria-label="Move selected layers up" title="Move up · toward front" onClick={() => shift("up")}><Arrow /></button>
+      <button type="button" disabled={disabled || moveDown.scene === scene} aria-label="Move selected layers down" title="Move down · toward back" onClick={() => shift("down")}><Arrow down /></button>
+      <span className="te-layer-toolbar-divider" />
+      <button type="button" disabled={disabled || selected.length !== 1 || selected[0]?.locked} aria-label="Rename selected layer" title="Rename layer · F2" onClick={() => selected[0] && beginRename(selected[0])}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m14 5 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14z" /></svg></button>
+      {onDuplicate && <button type="button" disabled={disabled || !unlocked.length || scene.elements.length >= 100} aria-label="Duplicate selected layers" title="Duplicate selected layers" onClick={onDuplicate}><CopyIcon /></button>}
+      {onDelete && <button type="button" className="te-layer-delete" disabled={disabled || !unlocked.length} aria-label="Delete selected layers" title="Delete selected layers" onClick={onDelete}><TrashIcon /></button>}
+    </div>
+    {renameError && <p className="te-layer-rename-error" role="alert">{renameError}</p>}
+    <div className="te-layer-order-caption"><span>FRONT</span><span>Drag to reorder</span></div>
+    <ul className="te-layer-list" aria-label="Layers from front to back">
+      {filtered.map((element) => {
+        const name = layerName(element), hidden = Boolean(element.hidden), offCanvas = !elementIntersectsCanvas(element, width, height);
+        return <li key={element.id} data-layer-row-id={element.id} draggable={!disabled && !element.locked && !rename}
+          className={`${selectedSet.has(element.id) ? "is-selected " : ""}${hidden ? "is-hidden " : ""}${dragging.includes(element.id) ? "is-dragging " : ""}${dropTarget?.id === element.id ? dropTarget.after ? "drop-after" : "drop-before" : ""}`}
+          onDragStart={(event) => startDrag(event, element)} onDragEnd={endDrag} onDragOver={(event) => dragOver(event, element)} onDrop={(event) => drop(event, element)}
+          onContextMenu={(event) => onContextMenu(event, element)}
+          onKeyDown={(event) => {
+            if ((event.target as HTMLElement).closest("input,textarea,select")) return;
+            if (event.key === "F2") { event.preventDefault(); event.stopPropagation(); beginRename(element); }
+            if (event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key)) {
+              event.preventDefault(); event.stopPropagation();
+              const ids = selectedSet.has(element.id) ? selectedIds : [element.id];
+              const next = reorderSelection(scene, ids, event.key === "ArrowUp" ? "forward" : "backward");
+              if (!disabled && next.scene !== scene && onChange(next.scene) !== false) { onSelect(ids); setAnnouncement(`${name} moved ${event.key === "ArrowUp" ? "up" : "down"}.`); }
+            }
+          }}>
+          <div className="te-layer-row-main">
+            <button type="button" className="te-layer-select" disabled={disabled} aria-pressed={selectedSet.has(element.id)} aria-label={`Select layer ${name}${hidden ? ", hidden" : ""}${element.locked ? ", locked" : ""}`} onClick={(event) => choose(element, event.shiftKey || event.metaKey || event.ctrlKey)} onDoubleClick={() => beginRename(element)}>
+              <Thumbnail element={element} />
+              <span className="te-layer-description"><strong>{name}</strong><span>{typeName(element)}{element.locked ? " · Locked" : ""}{hidden ? " · Hidden" : ""}</span></span>
+            </button>
+            <div className="te-layer-row-tools">
+              <button type="button" disabled={disabled} className={hidden ? "is-on" : ""} aria-label={`${hidden ? "Show" : "Hide"} layer ${name}`} title={hidden ? "Show layer" : "Hide layer"} aria-pressed={!hidden} onClick={() => toggle(element.id, "hidden")}><Eye hidden={hidden} /></button>
+              <button type="button" disabled={disabled} className={element.locked ? "is-on" : ""} aria-label={`${element.locked ? "Unlock" : "Lock"} layer ${name}`} title={element.locked ? "Unlock layer" : "Lock layer"} aria-pressed={element.locked} onClick={() => toggle(element.id, "locked")}><Lock locked={element.locked} /></button>
+              <button type="button" aria-label={`Actions for layer ${name}`} title="Layer actions" aria-haspopup="menu" onClick={(event) => (onMenuClick ?? onContextMenu)(event, element)}>⋯</button>
+            </div>
+          </div>
+          {rename?.id === element.id && <input className="te-layer-rename" autoFocus aria-label={`Rename layer ${name}`} value={rename.value} maxLength={200} onFocus={(event) => event.currentTarget.select()} onChange={(event) => { setRename({ ...rename, value: event.target.value }); setRenameError(""); }} onBlur={(event) => { if (event.relatedTarget instanceof Element && event.relatedTarget.closest('[role="menu"]')) return; finishRename(); }} onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+            if (event.key === "Escape") { event.preventDefault(); cancelledRename.current = true; setRename(null); setRenameError(""); }
+          }} />}
+          {offCanvas && <button type="button" className="te-layer-off-canvas" disabled={disabled} title="Find on workspace" onClick={() => { onSelect([element.id]); onLocate?.(element); }}><Locate />Outside page<span>Locate ↗</span></button>}
+        </li>;
+      })}
+    </ul>
+    {!filtered.length && <div className="te-layer-empty"><span aria-hidden>▤</span><strong>{scene.elements.length ? "No matching layers" : "Your canvas is ready"}</strong><p>{scene.elements.length ? "Search for a name, text, or layer type." : "Add text, shapes, or images and manage them here."}</p></div>}
+    {filtered.length > 0 && <div className="te-layer-order-caption te-layer-back-caption"><span>BACK</span></div>}
+    <p className="te-layer-help">Shift-click for multiple layers. Double-click a name to rename. Alt + ↑ / ↓ changes the order.</p>
+    <span className="te-sr-only" role="status" aria-live="polite">{announcement}</span>
+  </section>;
+}

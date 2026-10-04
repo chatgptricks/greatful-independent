@@ -14,6 +14,7 @@ import type {
   CanvasScene,
   TextElement,
 } from "@/lib/template-editor/model";
+import { elementIntersectsCanvas } from "@/lib/template-editor/canvas-geometry";
 import { proxied } from "@/lib/grateful-future/util";
 import "./canvas.css";
 
@@ -79,7 +80,7 @@ function mergeGesture(scene: CanvasScene, active: Gesture): CanvasScene {
   const selected = new Set(active.ids);
   let changed = false;
   const elements = scene.elements.map((element) => {
-    if (!selected.has(element.id) || element.locked) return element;
+    if (!selected.has(element.id) || element.locked || element.hidden) return element;
     const original = originals.get(element.id), next = transformed.get(element.id);
     if (!original || !next || original.type !== element.type || next.type !== element.type) return element;
     const replacement = { ...element };
@@ -191,7 +192,7 @@ function SceneElement({ element }: { element: CanvasElement }) {
 export function SceneRenderer({ scene }: { scene: CanvasScene }) {
   return (
     <div className="te-canvas-scene" style={{ background: scene.background }}>
-      {scene.elements.map((element) => (
+      {scene.elements.filter((element) => !element.hidden).map((element) => (
         <SceneElement key={element.id} element={element} />
       ))}
     </div>
@@ -258,8 +259,8 @@ function resizeSingle(
   const local = rotate(delta, -element.rotation);
   const sx = handle.includes("w") ? -1 : handle.includes("e") ? 1 : 0;
   const sy = handle.includes("n") ? -1 : handle.includes("s") ? 1 : 0;
-  let width = clamp(element.width + sx * local.x, 8, 2160);
-  let height = clamp(element.height + sy * local.y, 8, 3840);
+  let width = clamp(element.width + sx * local.x, 8, 10_000);
+  let height = clamp(element.height + sy * local.y, 8, 10_000);
   const isCorner = Boolean(sx && sy);
   // Text corners scale the type; side handles reflow the text within its box.
   if (isCorner && (preserveAspect || element.type === "text")) {
@@ -371,6 +372,15 @@ type CanvasEditorProps = {
   onChange: (scene: CanvasScene, group?: string) => void;
   onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, targetId: string | null) => void;
   editingRequest?: { id: string; serial: number };
+  /** Editor-only view setting; thumbnails and exports always clip to the page. */
+  clipToCanvas?: boolean;
+  /** Blank workspace available for marquee selection, in page coordinates. */
+  pasteboardBounds?: { x: number; y: number; width: number; height: number };
+  /** Show editor-only boundaries for a continuous carousel. */
+  slideWidth?: number;
+  /** Previous-slide guide; never part of the design or export renderer. */
+  onionScene?: CanvasScene;
+  onionOpacity?: number;
   disabled?: boolean;
 };
 
@@ -383,6 +393,11 @@ export function CanvasEditor({
   onChange,
   onContextMenu,
   editingRequest,
+  clipToCanvas = true,
+  pasteboardBounds,
+  slideWidth,
+  onionScene,
+  onionOpacity = 0.2,
   disabled = false,
 }: CanvasEditorProps) {
   const root = useRef<HTMLDivElement>(null);
@@ -398,13 +413,18 @@ export function CanvasEditor({
   const [selectionArea, setSelectionArea] = useState<Box | null>(null);
   const [guides, setGuides] = useState({ x: false, y: false });
   const currentScene = live ?? scene;
+  const slideCount = slideWidth && Number.isFinite(slideWidth) && slideWidth > 0
+    ? Math.min(20, Math.ceil(width / slideWidth)) : 0;
+  const clippedIds = new Set(clipToCanvas ? currentScene.elements
+    .filter((element) => !element.hidden && elementIntersectsCanvas(element, width, height))
+    .map((element) => element.id) : []);
   const selected = currentScene.elements.filter((element) =>
-    selectedIds.includes(element.id),
+    !element.hidden && selectedIds.includes(element.id),
   );
   const selectionBox = selected.length ? selectionBounds(selected) : null;
   const editingElement = currentScene.elements.find(
     (element): element is TextElement =>
-      element.id === editingId && element.type === "text",
+      !element.hidden && element.id === editingId && element.type === "text",
   );
 
   useLayoutEffect(() => {
@@ -431,7 +451,7 @@ export function CanvasEditor({
     const request = `${editingRequest.id}:${editingRequest.serial}`;
     if (lastEditingRequest.current === request) return;
     const element = scene.elements.find((item) => item.id === editingRequest.id);
-    if (element?.type !== "text" || element.locked) return;
+    if (element?.type !== "text" || element.locked || element.hidden) return;
     let cancelled = false;
     // Defer until a context menu has released its focus and restored the
     // canvas. Repeated scene changes during typing do not restart editing.
@@ -512,7 +532,7 @@ export function CanvasEditor({
   }
 
   function startEditing(element: CanvasElement) {
-    if (disabled || element.locked || element.type !== "text") return;
+    if (disabled || element.locked || element.hidden || element.type !== "text") return;
     if (editingActive.current && editingActive.current !== element.id)
       finishEditing();
     onSelect([element.id]);
@@ -533,7 +553,7 @@ export function CanvasEditor({
     event.stopPropagation();
     const source = finishEditing();
     const movable = source.elements.filter(
-      (element) => ids.includes(element.id) && !element.locked,
+      (element) => ids.includes(element.id) && !element.locked && !element.hidden,
     );
     if (!movable.length) return;
     root.current?.focus({ preventScroll: true });
@@ -586,8 +606,8 @@ export function CanvasEditor({
     capture.setPointerCapture(event.pointerId);
     marquee.current = {
       pointer: event.pointerId, capture,
-      start: { x: clamp(point.x, 0, width), y: clamp(point.y, 0, height) },
-      source, previousIds: [...selectedIds], baseIds: event.shiftKey ? [...selectedIds] : [], moved: false,
+      start: point,
+      source, previousIds: [...selectedIds], baseIds: event.shiftKey ? selected.map((element) => element.id) : [], moved: false,
     };
     if (!event.shiftKey) onSelect([]);
   }
@@ -624,13 +644,20 @@ export function CanvasEditor({
     if (selecting && selecting.pointer === event.pointerId) {
       event.preventDefault();
       const point = position(event);
-      const x = clamp(point.x, 0, width), y = clamp(point.y, 0, height);
+      const { x, y } = point;
       const viewScale = root.current!.getBoundingClientRect().width / width;
       if (!selecting.moved && Math.hypot(x - selecting.start.x, y - selecting.start.y) * viewScale < 3) return;
       selecting.moved = true;
       const area = { x: Math.min(selecting.start.x, x), y: Math.min(selecting.start.y, y), width: Math.abs(x - selecting.start.x), height: Math.abs(y - selecting.start.y), rotation: 0 };
       setSelectionArea(area);
-      const hitIds = selecting.source.elements.filter((element) => !element.locked && intersectsMarquee(element, area)).map((element) => element.id);
+      const hitIds = selecting.source.elements.filter((element) => {
+        if (element.locked || element.hidden) return false;
+        if (!clipToCanvas || !elementIntersectsCanvas(element, width, height)) return intersectsMarquee(element, area);
+        // A partly clipped layer can only be selected through its visible area.
+        const left = Math.max(0, area.x), top = Math.max(0, area.y);
+        const visible = { x: left, y: top, width: Math.min(width, area.x + area.width) - left, height: Math.min(height, area.y + area.height) - top, rotation: 0 };
+        return visible.width > 0 && visible.height > 0 && intersectsMarquee(element, visible);
+      }).map((element) => element.id);
       onSelect([...new Set([...selecting.baseIds, ...hitIds])]);
       return;
     }
@@ -742,7 +769,7 @@ export function CanvasEditor({
     <div
       ref={root}
       className={`te-canvas-editor${disabled ? " is-disabled" : ""}${live ? " is-transforming" : ""}${selectionArea ? " is-selecting" : ""}`}
-      style={{ width, height }}
+      style={{ width, height, background: onionScene ? currentScene.background : undefined }}
       role="region"
       aria-label="Design canvas"
       tabIndex={0}
@@ -777,11 +804,23 @@ export function CanvasEditor({
         }
       }}
     >
-      <SceneRenderer scene={displayScene} />
+      <div className="te-canvas-pasteboard-hit" aria-hidden="true" style={pasteboardBounds ? {left: pasteboardBounds.x, top: pasteboardBounds.y, width: pasteboardBounds.width, height: pasteboardBounds.height} : {inset: 0}} />
+      {onionScene && (
+        <div className="te-canvas-onion-skin" data-onion-skin="true" aria-hidden="true" style={{opacity: Number.isFinite(onionOpacity) ? clamp(onionOpacity, 0, 1) : 0.2}}>
+          <SceneRenderer scene={{...onionScene, background: "transparent"}} />
+        </div>
+      )}
+      <div className="te-canvas-scene te-canvas-editor-scene" style={{background: onionScene ? "transparent" : displayScene.background}}>
+        {displayScene.elements.filter((element) => !element.hidden).map((element) => (
+          <div key={element.id} className={`te-canvas-page-layer${clippedIds.has(element.id) ? " is-clipped" : ""}`}>
+            <SceneElement element={element} />
+          </div>
+        ))}
+      </div>
       <div className="te-canvas-hit-area" aria-label="Canvas layers">
-        {currentScene.elements.map((element) => (
+        {currentScene.elements.filter((element) => !element.hidden).map((element) => (
+          <div key={element.id} className={`te-canvas-page-layer${clippedIds.has(element.id) ? " is-clipped" : ""}`}>
           <div
-            key={element.id}
             role="button"
             tabIndex={disabled ? -1 : 0}
             aria-label={`${element.name || element.type} layer${element.locked ? ", locked" : ""}`}
@@ -815,9 +854,21 @@ export function CanvasEditor({
               }
             }}
           />
+          </div>
         ))}
       </div>
+      {slideCount > 0 && (
+        <div className="te-canvas-slide-guides" aria-hidden="true">
+          {Array.from({length: slideCount}, (_, index) => (
+            <div key={index} className="te-canvas-slide-marker" style={{left: index * slideWidth!}}>
+              <span className="te-canvas-slide-label">Slide {index + 1}</span>
+              {index > 0 && <span className="te-canvas-slide-seam" />}
+            </div>
+          ))}
+        </div>
+      )}
       {editingElement && (
+        <div className={`te-canvas-page-layer is-editing${clippedIds.has(editingElement.id) ? " is-clipped" : ""}`}>
         <div
           className="te-canvas-edit-box"
           style={{
@@ -886,6 +937,7 @@ export function CanvasEditor({
           >
             {editingSeed}
           </div>
+        </div>
         </div>
       )}
       {selected.length > 1 &&

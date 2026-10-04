@@ -599,13 +599,32 @@ test("independent text, image and shape layers retain stacking, transforms and s
   );
 });
 
+test("optional layer visibility preserves true, false and legacy absence in saved scenes", () => {
+  const elements = [
+    createCanvasElement("text", { hidden: true }),
+    createCanvasElement("image", { hidden: false }),
+    createCanvasElement("shape"),
+  ];
+  const input = canvasLibrary(elements);
+  const parsed = parseLibrary(JSON.stringify(input))!;
+  assert.deepEqual(parsed, input);
+  assert.equal(parsed.designs[0].pages[0].canvas!.elements[0].hidden, true);
+  assert.equal(parsed.designs[0].pages[0].canvas!.elements[1].hidden, false);
+  assert.equal("hidden" in parsed.designs[0].pages[0].canvas!.elements[2], false);
+  for (const hidden of [null, "false", "true", 0, 1, {}, []]) {
+    const malformed = canvasLibrary([createCanvasElement("shape")]);
+    Object.assign(malformed.designs[0].pages[0].canvas!.elements[0], { hidden });
+    assert.equal(parseLibrary(malformed), null, String(hidden));
+  }
+});
+
 test("all design and template copy paths isolate canvas layers and regenerate their identities", () => {
   const design = createBlankDesign("Layered original", "portrait");
   const originalScene: CanvasScene = {
     background: "#aabbcc",
     elements: [
-      createCanvasElement("text", { text: "Keep this" }),
-      createCanvasElement("image"),
+      createCanvasElement("text", { text: "Keep this", hidden: true }),
+      createCanvasElement("image", { hidden: false }),
       createCanvasElement("shape"),
     ],
   };
@@ -628,12 +647,91 @@ test("all design and template copy paths isolate canvas layers and regenerate th
       assert.equal(ids.has(element.id), false);
       ids.add(element.id);
       assert.notEqual(element, originalScene.elements[index]);
+      assert.equal(element.hidden, originalScene.elements[index].hidden);
+      assert.equal("hidden" in element, "hidden" in originalScene.elements[index]);
       element.x = 300;
+      element.hidden = !element.hidden;
     }
     scene.background = "#000000";
   }
   assert.equal(originalScene.background, "#aabbcc");
   assert.ok(originalScene.elements.every((element) => element.x === 36));
+  assert.deepEqual(originalScene.elements.map(element => element.hidden), [true, false, undefined]);
+});
+
+test("continuous carousel scenes round-trip on designs and templates with at least two slides", () => {
+  const input = canvasLibrary([]);
+  const design = input.designs[0];
+  design.pages.push(duplicatePage(design.pages[0]));
+  design.continuousCanvas = {
+    background: "#fff0",
+    elements: [createCanvasElement("image", { x: 330, width: 200, cropX: 18, cropY: 70, hidden: true })],
+  };
+  input.templates = [designAsTemplate(design, "Continuous series")];
+  assert.deepEqual(parseLibrary(JSON.stringify(input)), input);
+  for (const target of ["designs", "templates"] as const) {
+    const oneSlide = structuredClone(input);
+    oneSlide[target][0].pages = oneSlide[target][0].pages.slice(0, 1);
+    assert.equal(parseLibrary(oneSlide), null, `${target} requires two slides`);
+    for (const invalidScene of [null, {}, { background: "#fff", elements: [] as unknown[], extra: true }]) {
+      const malformed = structuredClone(input);
+      Object.assign(malformed[target][0], { continuousCanvas: invalidScene });
+      if (invalidScene && "background" in invalidScene) {
+        const normalized = parseLibrary(malformed)!;
+        assert.deepEqual(normalized[target][0].continuousCanvas, { background: "#fff", elements: [] });
+      } else {
+        assert.equal(parseLibrary(malformed), null);
+      }
+    }
+    const overPages = structuredClone(input);
+    while (overPages[target][0].pages.length <= 20) overPages[target][0].pages.push(duplicatePage(overPages[target][0].pages[0]));
+    assert.equal(parseLibrary(overPages), null);
+  }
+});
+
+test("continuous scenes enforce one global 100-layer cap and unique IDs", () => {
+  const input = canvasLibrary([]);
+  const design = input.designs[0];
+  design.pages.push(duplicatePage(design.pages[0]));
+  design.continuousCanvas = { background: "#fff", elements: Array.from({ length: 100 }, () => createCanvasElement("shape")) };
+  assert.ok(parseLibrary(input));
+  design.continuousCanvas.elements.push(createCanvasElement("text"));
+  assert.equal(parseLibrary(input), null);
+  design.continuousCanvas.elements.pop();
+  design.continuousCanvas.elements[1].id = design.continuousCanvas.elements[0].id;
+  assert.equal(parseLibrary(input), null);
+});
+
+test("continuous design copies, saved templates and template drafts get independent scene identities", () => {
+  const original = createBlankDesign("Continuous original", "portrait");
+  original.pages.push(duplicatePage(original.pages[0]));
+  original.continuousCanvas = {
+    background: "#aabbcc",
+    elements: [
+      createCanvasElement("text", { text: "Across\nslides", x: 350, hidden: true, letterSpacing: 3 }),
+      createCanvasElement("image", { x: 400, cropX: 10, cropY: 90, hidden: false }),
+    ],
+  };
+  const template = designAsTemplate(original, "Reusable continuous");
+  const copies = [cloneDesign(original), template, createDesign(template), editTemplateDesign(template)];
+  const ids = new Set(original.continuousCanvas.elements.map(element => element.id));
+  for (const copy of copies) {
+    const scene = copy.continuousCanvas!;
+    assert.notEqual(scene, original.continuousCanvas);
+    assert.notEqual(scene.elements, original.continuousCanvas.elements);
+    assert.equal(scene.background, original.continuousCanvas.background);
+    for (const [index, element] of scene.elements.entries()) {
+      assert.equal(ids.has(element.id), false);
+      ids.add(element.id);
+      assert.deepEqual({ ...element, id: original.continuousCanvas.elements[index].id }, original.continuousCanvas.elements[index]);
+      element.x += 100;
+      element.hidden = !element.hidden;
+    }
+    scene.background = "#000";
+  }
+  assert.deepEqual(original.continuousCanvas.elements.map(element => element.x), [350, 400]);
+  assert.deepEqual(original.continuousCanvas.elements.map(element => element.hidden), [true, false]);
+  assert.equal(original.continuousCanvas.background, "#aabbcc");
 });
 
 test("legacy migration is deterministic, does not rewrite pages, and preserves built-in content", () => {

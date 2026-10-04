@@ -8,6 +8,7 @@ import {
   type DesignDocument,
   type DesignPage,
 } from "@/lib/template-editor/model";
+import { sliceSceneForPage } from "@/lib/template-editor/continuous-carousel";
 import { SceneRenderer } from "./canvas";
 
 /** A single canonical layout size makes thumbnails, canvas and exports agree. */
@@ -21,6 +22,9 @@ export function DesignFrame({
   page: DesignPage;
 }) {
   const format = FORMATS[design.format];
+  const scene = design.continuousCanvas
+    ? sliceSceneForPage(design, page)
+    : page.canvas;
   return (
     <div
       className="te-frame"
@@ -29,8 +33,8 @@ export function DesignFrame({
         height: (FRAME_WIDTH * format.height) / format.width,
       }}
     >
-      {page.canvas ? (
-        <SceneRenderer scene={page.canvas} />
+      {scene ? (
+        <SceneRenderer scene={scene} />
       ) : (
         <SlideFrame
           img={page.image}
