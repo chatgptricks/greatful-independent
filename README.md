@@ -9,8 +9,8 @@ Built with Next.js 16, React 19, and Tailwind v4. The editor retains the establi
 ## Create a post
 
 1. Choose **New design** for a blank canvas, pick one of eight built-in templates, or start from **My templates**.
-2. Add independent text boxes, images, rectangles, circles, or lines. Double-click text to type directly; drag to move, use handles to resize, and rotate with the rotation handle. Center guides help align objects. Shift-click selects several elements together.
-3. Add, duplicate, reorder, or remove pages. Undo and redo changes while the design is open. Save a font and color palette in **Brand kit**, then apply it to every page.
+2. Add independent text boxes, images, rectangles, circles, or lines. Double-click text to type directly; drag to move, use handles to resize, and rotate with the rotation handle. Center guides help align objects. Shift-click adds to a selection; drag across empty canvas to select several elements together.
+3. Add, duplicate, reorder, or remove pages. Undo and redo changes while the design is open. Save fonts, palettes, logos, and images in **Brand kits**, then reuse them from the editor’s **Brand** tab.
 4. Use **Save as template** to keep the complete design as a starting point for future posts. Copies receive independent page and image identities.
 5. Export the current page as PNG, or all pages as a ZIP containing numbered PNGs and the post caption when present. Captions can also be downloaded separately as TXT.
 
@@ -24,7 +24,9 @@ Template drafts autosave and can be resumed from **My templates** or **Your desi
 
 Select an element to open contextual properties: font, size, bold, italic, underline, uppercase/lowercase, text alignment, letter and line spacing, colors, opacity, rotation, and exact position and dimensions. Image controls include fill/fit, crop position, and corner radius; shapes include fill, border, and radius. Alignment actions place objects against page edges or center. Layers can be reordered, locked, duplicated, or deleted. Properties display output pixels; the renderer uses a canonical 360 px canvas and exports at 3×.
 
-Use **T** to add text, **R** for a rectangle, **O** for a circle, **⌘/Ctrl+D** to duplicate, **⌘/Ctrl+C/V** to copy/paste elements, arrow keys to nudge, and **⌘/Ctrl+Z** to undo. The shortcut dialog lists the complete set. Text entry keeps normal typing and clipboard behavior. Images can be uploaded, dropped, or pasted into the workspace.
+Right-click canvas elements, blank canvas, layers, pages, template/design cards, or the workspace for custom actions. Visible **⋯** buttons provide the same actions on touch screens. Menus support arrow keys, Escape, and **Shift+F10**; editable fields have custom copy/cut/paste/select-all menus. The quick toolbar keeps font, size, bold, italic, underline, uppercase, alignment, color, duplicate, and delete within reach.
+
+Use **T** to add text, **R** for a rectangle, **O** for a circle, **⌘/Ctrl+D** to duplicate, **⌘/Ctrl+C/X/V** to copy/cut/paste elements, arrow keys to nudge, and **⌘/Ctrl+Z** to undo. The shortcut dialog lists the complete set. Text entry keeps normal typing and clipboard behavior. Images can be uploaded, dropped, or pasted into the workspace.
 
 Older pages keep their original appearance. Choose **Edit individual elements** to convert a page to layers; Undo restores it. New posts from templates start with editable layers. Original legacy fields stay with each page. Legacy photo gradients and blur treatments become editable backdrop/shading layers; research rendering is unchanged.
 
@@ -37,6 +39,14 @@ Older pages keep their original appearance. Choose **Edit individual elements** 
 Upload JPG, PNG, or WebP images up to 15 MB. The editor resizes uploads to a maximum dimension of 1800 px, compresses them, and saves the resulting image with the design. The built-in template artwork lives in this repository and needs no external image service.
 
 The current editor supports up to 100 elements per page, 20 pages per design, 150 designs, and 80 custom templates. The complete save request has a 12 MB limit; embedded images count toward it. This editor exports still images. The preserved research workspace retains its existing video tools.
+
+## Brand kits and reusable elements
+
+Create and switch between up to 20 brand kits. Each kit keeps its name, font, default background/text colors, up to 20 palette colors, and 40 reusable logos/images. Upload PNG, JPG, or WebP files; transparency is preserved. Asset menus support renaming, categorizing as a logo/image, and removal. Removing a kit asset leaves images already used in designs intact.
+
+In any design, open **Brand** to insert a saved logo or image, apply a palette color to selected text/shapes, or apply kit styling to the current page or every page. With nothing selected, a palette swatch changes the page background. Right-click an existing image and choose **Save image to brand kit** to reuse it in other posts. Locked text keeps its styling when applying a kit.
+
+Brand kits and their assets use the same authenticated autosave, local recovery, and JSON backup as designs. Older single-brand libraries migrate automatically. The shared 12 MB library save limit includes embedded assets and their design copies; oversized changes are rejected before replacing saved work.
 
 ## Run locally
 
@@ -56,7 +66,7 @@ Changes autosave through `/api/template-editor`. With Supabase configured, the a
 
 The browser keeps pending edits in IndexedDB for recovery. Save status shows whether changes reached cloud storage or the local development server. If another tab or device has saved a newer version, revision checks stop an overwrite and display a conflict. Download a backup before loading the saved version if you want to keep both sets of edits.
 
-**Your designs → Backup** downloads a JSON workspace containing designs, custom templates, uploaded images, and the brand kit. **Import backup** adds copies of the imported designs and templates and applies the imported brand kit. Imports validate document structure, image URLs, rich text, and library limits before rendering.
+**Your designs → Backup** downloads a JSON workspace containing designs, custom templates, uploaded images, and every brand kit with its reusable assets. **Import backup** adds copies of the imported designs and templates and adds independent copies of imported brand kits, selecting the imported active kit. Imports validate document structure, image URLs, rich text, and library limits before rendering.
 
 ## Research workspace
 
@@ -72,7 +82,7 @@ npm run lint
 npm run build
 ```
 
-The template-editor tests use Node's built-in test runner and the installed TypeScript compiler. They load the real model and persistence modules; authentication and database boundaries are replaced with controlled fixtures. No API keys, live database, or additional test dependencies are required. Coverage includes independent design copies, template round trips, import validation, unsafe rich text, owner isolation, concurrent saves, API access, and request limits.
+The template-editor tests use Node's built-in test runner and the installed TypeScript compiler. They load the real model and persistence modules; authentication and database boundaries are replaced with controlled fixtures. No API keys, live database, or additional test dependencies are required. Coverage includes independent design copies, template round trips, import validation, unsafe rich text, owner isolation, concurrent saves, API access, request limits, brand migrations and asset validation, and immutable selection commands with locked-layer protection.
 
 For a browser check, create a carousel, edit text and imagery, reorder pages, reopen the design after a reload, save it as a template, and export each of the three formats. Check the exported dimensions and appearance as well as the save status.
 

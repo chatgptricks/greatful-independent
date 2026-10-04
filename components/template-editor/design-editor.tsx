@@ -24,19 +24,27 @@ import {
   type CanvasElement,
   type CanvasScene,
   type BrandKit,
+  type SavedBrandKit,
+  type BrandAsset,
   type DesignDocument,
   type DesignFormat,
   type DesignTemplate,
+  type DesignPage,
 } from "@/lib/template-editor/model";
 import { exportFrames, fileName, saveBlob } from "@/lib/template-editor/export";
 import { ColorField, Modal } from "./controls";
 import { CanvasEditor } from "./canvas";
+import { BrandPanel } from "./brand-panel";
+import { QuickToolbar } from "./quick-toolbar";
+import { useContextMenu, type ContextMenuItem } from "./context-menu";
+import { copySelection, duplicateSelection, pasteSelection, removeSelection, setSelectionLocked, reorderSelection, alignSelection, type SceneCommandResult } from "@/lib/template-editor/commands";
 import { ElementInspector } from "./element-inspector";
 import "./wysiwyg.css";
 import { DesignFrame, DesignPreview, FRAME_WIDTH } from "./preview";
 
 type Tab =
   | "templates"
+  | "brand"
   | "text"
   | "elements"
   | "media"
@@ -47,9 +55,14 @@ type Props = {
   design: DesignDocument;
   templates: DesignTemplate[];
   brand: BrandKit;
+  brandKits: SavedBrandKit[];
+  activeBrandKitId: string;
+  onSelectBrandKit: (id: string) => void;
+  onSaveBrandAsset: (asset: BrandAsset, kitId: string) => boolean | void;
+  onManageBrand: () => void;
   saveStatus: string;
   canEdit: boolean;
-  onChange: (design: DesignDocument) => void;
+  onChange: (design: DesignDocument) => boolean | void;
   onExit: () => void;
   onSaveTemplate: (template: DesignTemplate) => void;
 };
@@ -58,12 +71,20 @@ export function DesignEditor({
   design: initial,
   templates,
   brand,
+  brandKits,
+  activeBrandKitId,
+  onSelectBrandKit,
+  onSaveBrandAsset,
+  onManageBrand,
   saveStatus,
   canEdit,
   onChange,
   onExit,
   onSaveTemplate,
 }: Props) {
+  const { openMenu } = useContextMenu();
+  const [editingRequest, setEditingRequest] = useState<{id: string; serial: number}>();
+  const [renameLayer, setRenameLayer] = useState<{id: string; name: string} | null>(null);
   const [design, setDesign] = useState<DesignDocument>(initial);
   const current = useRef<DesignDocument>(design);
   const history = useRef<{
@@ -101,7 +122,7 @@ export function DesignEditor({
       mounted.current = false;
     };
   }, []);
-  const [removeOpen, setRemoveOpen] = useState(false);
+  const [removePageId, setRemovePageId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [fit, setFit] = useState(1);
   const [dragged, setDragged] = useState<string | null>(null);
@@ -125,12 +146,15 @@ export function DesignEditor({
       : "Save template"
     : "Save as template";
   const disabled = !canEdit || Boolean(job);
+  const blocked = useRef(disabled);
+  useEffect(() => { blocked.current = disabled; }, [disabled]);
 
   const commit = useCallback(
     (change: (d: DesignDocument) => DesignDocument, group = "") => {
-      if (!canEdit || job) return;
+      if (blocked.current) return false;
       const previous = current.current;
       const next = { ...change(previous), updatedAt: new Date().toISOString() };
+      if (onChangeRef.current(next) === false) return false;
       const h = history.current;
       if (!group || group !== h.group || Date.now() - h.time > 650) {
         h.past.push(previous);
@@ -142,29 +166,31 @@ export function DesignEditor({
       setHistoryState({ undo: h.past.length > 0, redo: false });
       current.current = next;
       setDesign(next);
-      onChangeRef.current(next);
+      return true;
     },
-    [canEdit, job],
+    [],
   );
   const travel = useCallback(
     (direction: "undo" | "redo") => {
-      if (!canEdit || job) return;
+      if (blocked.current) return;
       const h = history.current;
-      const next = (direction === "undo" ? h.past : h.future).pop();
+      const source = direction === "undo" ? h.past : h.future;
+      const next = source.at(-1);
       if (!next) return;
+      const updated = { ...next, updatedAt: new Date().toISOString() };
+      if (onChangeRef.current(updated) === false) return;
+      source.pop();
       (direction === "undo" ? h.future : h.past).push(current.current);
       h.group = "";
       setHistoryState({ undo: h.past.length > 0, redo: h.future.length > 0 });
-      const updated = { ...next, updatedAt: new Date().toISOString() };
       current.current = updated;
       setDesign(updated);
-      onChangeRef.current(updated);
     },
-    [canEdit, job],
+    [],
   );
   const changeScene = useCallback(
     (next: CanvasScene, group = "") => {
-      commit(
+      return commit(
         (d) => ({
           ...d,
           pages: d.pages.map((p) =>
@@ -176,12 +202,104 @@ export function DesignEditor({
     },
     [commit, page.id],
   );
+  function applyCommand(command: (live: CanvasScene) => SceneCommandResult) {
+    if (blocked.current) return;
+    const target = current.current.pages.find((item) => item.id === page.id);
+    if (!target) return;
+    const live = target.canvas ?? sceneForPage(target, current.current.format);
+    const result = command(live);
+    if (result.scene !== live && !changeScene(result.scene)) return;
+    setSelected(result.selectedIds);
+    if (result.limited) setNotice("This page has reached its 100-element limit.");
+  }
+  function copyElements(ids: string[], cut = false) {
+    if (cut && blocked.current) return;
+    const copyIds = cut ? ids.filter((id) => !scene.elements.find((e) => e.id === id)?.locked) : ids;
+    const target = current.current.pages.find((item) => item.id === page.id);
+    if (!target) return;
+    copied.current = copySelection(target.canvas ?? sceneForPage(target, current.current.format), copyIds);
+    if (cut) applyCommand((live) => removeSelection(live, copyIds));
+    setNotice(`${copied.current.length} element${copied.current.length === 1 ? "" : "s"} ${cut ? "cut" : "copied"}. Paste on any page in this design.`);
+  }
+  function elementMenu(ids: string[]): ContextMenuItem[] {
+    const elements = scene.elements.filter((e) => ids.includes(e.id));
+    const editable = elements.filter((e) => !e.locked);
+    const single = elements.length === 1 ? elements[0] : undefined;
+    return [
+      ...(single?.type === "text" ? [{id: "edit-text", label: "Edit text", disabled: disabled || single.locked, onSelect: () => setEditingRequest({id: single.id, serial: Date.now()})}] : []),
+      {id: "copy", label: "Copy", shortcut: "⌘/Ctrl C", onSelect: () => copyElements(ids)},
+      {id: "cut", label: "Cut", shortcut: "⌘/Ctrl X", disabled: disabled || !editable.length, onSelect: () => copyElements(ids, true)},
+      {id: "duplicate", label: "Duplicate", shortcut: "⌘/Ctrl D", disabled: disabled || !editable.length || scene.elements.length >= 100, onSelect: () => applyCommand((live) => duplicateSelection(live, ids))},
+      {id: "paste", label: "Paste", shortcut: "⌘/Ctrl V", disabled: disabled || !copied.current.length || scene.elements.length >= 100, onSelect: () => applyCommand((live) => pasteSelection(live, copied.current))},
+      {id: "front", label: "Bring to front", separator: true, disabled: disabled || !editable.length, onSelect: () => applyCommand((live) => reorderSelection(live, ids, "front"))},
+      {id: "forward", label: "Bring forward", shortcut: "⌘/Ctrl ]", disabled: disabled || !editable.length, onSelect: () => applyCommand((live) => reorderSelection(live, ids, "forward"))},
+      {id: "backward", label: "Send backward", shortcut: "⌘/Ctrl [", disabled: disabled || !editable.length, onSelect: () => applyCommand((live) => reorderSelection(live, ids, "backward"))},
+      {id: "back", label: "Send to back", disabled: disabled || !editable.length, onSelect: () => applyCommand((live) => reorderSelection(live, ids, "back"))},
+      {id: "center", label: "Center horizontally on page", separator: true, disabled: disabled || !editable.length, onSelect: () => applyCommand((live) => alignSelection(live, ids, "center", {width: FRAME_WIDTH, height: canvasHeight}, "group"))},
+      {id: "middle", label: "Center vertically on page", disabled: disabled || !editable.length, onSelect: () => applyCommand((live) => alignSelection(live, ids, "middle", {width: FRAME_WIDTH, height: canvasHeight}, "group"))},
+      {id: "lock", label: editable.length ? "Lock" : "Unlock", separator: true, disabled, onSelect: () => applyCommand((live) => setSelectionLocked(live, ids, editable.length > 0))},
+      ...(single ? [{id: "rename", label: "Rename layer", disabled, onSelect: () => setRenameLayer({id: single.id, name: single.name})}] : []),
+      ...(single?.type === "image" ? [{id:"save-brand", label:"Save image to brand kit", disabled:disabled || (brandKits.find((kit) => kit.id === activeBrandKitId)?.assets.length ?? 0) >= 40, onSelect:() => {
+        if (blocked.current) return;
+        if (onSaveBrandAsset({id:crypto.randomUUID(),name:single.name,src:single.src,width:single.width,height:single.height,kind:"image"}, activeBrandKitId) === false) return;
+        setNotice("Image saved to your brand kit. Reuse it from the Brand tab.");
+      }}] : []),
+      {id: "properties", label: "Show properties", onSelect: () => setTab("style")},
+      {id: "delete", label: "Delete", shortcut: "⌫", separator: true, danger: true, disabled: disabled || !editable.length, onSelect: () => applyCommand((live) => removeSelection(live, ids))},
+    ];
+  }
+  function canvasMenu(event: React.MouseEvent, targetId: string | null) {
+    const ids = targetId ? (selected.includes(targetId) ? selected : [targetId]) : [];
+    setSelected(ids);
+    const rect = event.currentTarget.closest(".te-free-stage")?.getBoundingClientRect();
+    const position = rect ? {x: Math.max(0, (event.clientX - rect.left) / scale), y: Math.max(0, (event.clientY - rect.top) / scale)} : undefined;
+    openMenu(event, {
+      label: ids.length > 1 ? `${ids.length} selected elements` : ids.length ? scene.elements.find((e) => e.id === ids[0])?.name ?? "Element" : "Canvas",
+      items: ids.length ? elementMenu(ids) : [
+        {id: "paste", label: "Paste here", shortcut: "⌘/Ctrl V", disabled: disabled || !copied.current.length || scene.elements.length >= 100, onSelect: () => applyCommand((live) => pasteSelection(live, copied.current, position))},
+        {id: "text", label: "Add text", shortcut: "T", disabled, onSelect: () => addText()},
+        {id: "shape", label: "Add rectangle", shortcut: "R", disabled, onSelect: () => addShape("rectangle")},
+        {id: "image", label: "Upload image", disabled: disabled || uploading, onSelect: () => fileRef.current?.click()},
+        {id: "select", label: "Select all unlocked elements", shortcut: "⌘/Ctrl A", separator: true, disabled: !scene.elements.some((e) => !e.locked), onSelect: () => setSelected(scene.elements.filter((e) => !e.locked).map((e) => e.id))},
+        {id: "background", label: "Page background & properties", onSelect: () => setTab("style")},
+        {id: "undo", label: "Undo", shortcut: "⌘/Ctrl Z", separator: true, disabled: disabled || !historyState.undo, onSelect: () => travel("undo")},
+        {id: "redo", label: "Redo", shortcut: "⌘/Ctrl ⇧ Z", disabled: disabled || !historyState.redo, onSelect: () => travel("redo")},
+      ],
+    });
+  }
+  function pageMenu(event: React.MouseEvent, target: DesignPage) {
+    const targetIndex = design.pages.findIndex((p) => p.id === target.id);
+    openMenu(event, {label: `Page ${targetIndex + 1}`, items: [
+      {id: "open-page", label: "Go to page", onSelect: () => {setPageId(target.id); setSelected([]);}},
+      {id: "duplicate-page", label: "Duplicate page", disabled: disabled || design.pages.length >= 20, onSelect: () => addPage(true, target)},
+      {id: "add-page", label: "Add blank page after", disabled: disabled || design.pages.length >= 20, onSelect: () => addPage(false, target)},
+      {id: "left", label: "Move page left", separator: true, disabled: disabled || targetIndex === 0, onSelect: () => movePage(targetIndex, targetIndex - 1)},
+      {id: "right", label: "Move page right", disabled: disabled || targetIndex === design.pages.length - 1, onSelect: () => movePage(targetIndex, targetIndex + 1)},
+      {id: "export-page", label: "Download page as PNG", separator: true, disabled: Boolean(job) || uploading, onSelect: () => setJob({design: structuredClone(design), pageId: target.id})},
+      {id: "delete-page", label: "Delete page", danger: true, separator: true, disabled: disabled || design.pages.length <= 1, onSelect: () => setRemovePageId(target.id)},
+    ]});
+  }
+  function workspaceMenu(event: React.MouseEvent) {
+    openMenu(event, {label: design.name || "Design workspace", items: [
+      {id: "undo", label: "Undo", shortcut: "⌘/Ctrl Z", disabled: disabled || !historyState.undo, onSelect: () => travel("undo")},
+      {id: "redo", label: "Redo", shortcut: "⌘/Ctrl ⇧ Z", disabled: disabled || !historyState.redo, onSelect: () => travel("redo")},
+      {id: "paste", label: "Paste elements", shortcut: "⌘/Ctrl V", disabled: disabled || !copied.current.length, onSelect: () => applyCommand((live) => pasteSelection(live, copied.current))},
+      {id: "add", label: "Add blank page", separator: true, disabled: disabled || design.pages.length >= 20, onSelect: () => addPage()},
+      {id: "template", label: saveTemplateLabel, disabled, onSelect: () => setTemplateName(design.name)},
+      {id: "fit", label: "Fit to workspace", separator: true, onSelect: () => setZoom(1)},
+      {id: "layers", label: "Show layers", onSelect: () => setTab("layers")},
+      {id: "help", label: "Keyboard shortcuts", onSelect: () => setShowShortcuts(true)},
+    ]});
+  }
   function addElement(element: CanvasElement) {
-    if (scene.elements.length >= 100) {
+    const target = current.current.pages.find((item) => item.id === page.id);
+    if (!target) return;
+    const live = target.canvas ?? sceneForPage(target, current.current.format);
+    if (live.elements.length >= 100) {
       setNotice("Each page supports up to 100 elements.");
       return;
     }
-    changeScene({ ...scene, elements: [...scene.elements, element] });
+    if (!changeScene({ ...live, elements: [...live.elements, element] })) return;
     setSelected([element.id]);
   }
   const addText = (size = 28, text = "Add your text") =>
@@ -217,7 +335,7 @@ export function DesignEditor({
       const target = event.target as HTMLElement;
       if (
         target.closest(
-          "input, textarea, select, [contenteditable=true], dialog",
+          "input, textarea, select, [contenteditable=true], dialog, [role=menu]",
         ) ||
         disabled
       )
@@ -234,42 +352,29 @@ export function DesignEditor({
         setSelected(scene.elements.filter((e) => !e.locked).map((e) => e.id));
         return;
       }
-      if (mod && key === "c" && selected.length) {
+      if (mod && (key === "c" || key === "x") && selected.length) {
         event.preventDefault();
-        copied.current = structuredClone(
-          scene.elements.filter((e) => selected.includes(e.id)),
-        );
+        copyElements(selected, key === "x");
         return;
       }
-      if (mod && (key === "d" || key === "v")) {
-        const source =
-          key === "d"
-            ? scene.elements.filter((e) => selected.includes(e.id) && !e.locked)
-            : copied.current;
-        if (!source.length) return;
+      if (mod && key === "d" && selected.length) {
         event.preventDefault();
-        const copies = source
-          .slice(0, 100 - scene.elements.length)
-          .map((e) => ({
-            ...e,
-            id: crypto.randomUUID(),
-            locked: false,
-            x: Math.min(10000, e.x + 12),
-            y: Math.min(10000, e.y + 12),
-          }));
-        changeScene({ ...scene, elements: [...scene.elements, ...copies] });
-        setSelected(copies.map((e) => e.id));
+        applyCommand((live) => duplicateSelection(live, selected));
+        return;
+      }
+      if (mod && key === "v" && copied.current.length) {
+        event.preventDefault();
+        applyCommand((live) => pasteSelection(live, copied.current));
         return;
       }
       if ((key === "delete" || key === "backspace") && selected.length) {
         event.preventDefault();
-        changeScene({
-          ...scene,
-          elements: scene.elements.filter(
-            (e) => !selected.includes(e.id) || e.locked,
-          ),
-        });
-        setSelected([]);
+        applyCommand((live) => removeSelection(live, selected));
+        return;
+      }
+      if (mod && (key === "]" || key === "[")) {
+        event.preventDefault();
+        applyCommand((live) => reorderSelection(live, selected, key === "]" ? (event.shiftKey ? "front" : "forward") : (event.shiftKey ? "back" : "backward")));
         return;
       }
       if (key.startsWith("arrow") && selected.length) {
@@ -367,19 +472,23 @@ export function DesignEditor({
     };
   }, [job]);
 
-  function addPage(duplicate = false) {
-    if (design.pages.length >= 20) return;
-    const next = duplicatePage(page);
+  function addPage(duplicate = false, source: DesignPage = page) {
+    if (disabled || design.pages.length >= 20) return;
+    const liveSource = current.current.pages.find((p) => p.id === source.id);
+    if (!liveSource) return;
+    const sourceIndex = current.current.pages.indexOf(liveSource);
+    const next = duplicatePage(liveSource);
     if (!duplicate)
-      next.canvas = { background: scene.background, elements: [] };
-    commit((d) => ({
+      next.canvas = { background: source.canvas?.background ?? scene.background, elements: [] };
+    const accepted = commit((d) => ({
       ...d,
       pages: [
-        ...d.pages.slice(0, index + 1),
+        ...d.pages.slice(0, sourceIndex + 1),
         next,
-        ...d.pages.slice(index + 1),
+        ...d.pages.slice(sourceIndex + 1),
       ],
     }));
+    if (!accepted) return;
     setPageId(next.id);
     setSelected([]);
   }
@@ -453,7 +562,7 @@ export function DesignEditor({
         width: w,
         height: h,
       });
-      commit((d) => ({
+      const accepted = commit((d) => ({
         ...d,
         pages: d.pages.map((p) => {
           if (p.id !== targetId) return p;
@@ -474,6 +583,7 @@ export function DesignEditor({
           };
         }),
       }));
+      if (!accepted) return;
       if (activePage.current === targetId) setSelected([replaceId ?? image.id]);
       setNotice(
         replaceId
@@ -488,17 +598,18 @@ export function DesignEditor({
       if (mounted.current) setUploading(false);
     }
   }
-  function applyBrand() {
-    commit((d) => ({
+  function applyBrand(all = true) {
+    const accepted = commit((d) => ({
       ...d,
       pages: d.pages.map((p) => {
+        if (!all && p.id !== page.id) return p;
         const content = p.canvas ?? sceneForPage(p, d.format);
         return {
           ...p,
           canvas: {
             background: brand.background,
             elements: content.elements.map((e) =>
-              e.type === "text"
+              e.type === "text" && !e.locked
                 ? { ...e, font: brand.font, color: brand.text }
                 : e,
             ),
@@ -506,7 +617,8 @@ export function DesignEditor({
         };
       }),
     }));
-    setNotice(`Applied ${brand.name || "your brand"} to all pages.`);
+    if (!accepted) return;
+    setNotice(`Applied ${brand.name || "your brand"} to ${all ? "all pages" : "this page"}.`);
   }
   const inspector = (
     <ElementInspector
@@ -521,7 +633,18 @@ export function DesignEditor({
   );
 
   return (
-    <div className="te-editor te-wysiwyg">
+    <div className="te-editor te-wysiwyg" onContextMenu={workspaceMenu}>
+                <input
+                  ref={fileRef}
+                  hidden
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) void upload(file);
+                  }}
+                />
       <header className="te-editor-header">
         <button
           className="te-icon"
@@ -668,6 +791,7 @@ export function DesignEditor({
                 ["text", TextIcon, "Text"],
                 ["elements", PlusIcon, "Elements"],
                 ["media", ImageIcon, "Uploads"],
+                ["brand", StarIcon, "Brand"],
                 ["layers", CopyIcon, "Layers"],
                 ["caption", TextIcon, "Caption"],
                 ["style", StarIcon, "Properties"],
@@ -716,7 +840,7 @@ export function DesignEditor({
                 <div className="te-panel-heading">
                   <h2>Your brand</h2>
                 </div>
-                <button className="te-button te-full" onClick={applyBrand}>
+                <button className="te-button te-full" onClick={() => applyBrand()}>
                   <StarIcon /> Apply brand to all pages
                 </button>
               </>
@@ -828,17 +952,6 @@ export function DesignEditor({
                   </strong>
                   <span>JPG, PNG or WebP · up to 15 MB</span>
                 </button>
-                <input
-                  ref={fileRef}
-                  hidden
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = "";
-                    if (file) void upload(file);
-                  }}
-                />
                 {selected.length === 1 &&
                   scene.elements.find((e) => e.id === selected[0])?.type ===
                     "image" && (
@@ -895,6 +1008,21 @@ export function DesignEditor({
                 </div>
               </>
             )}
+            {tab === "brand" && <BrandPanel kits={brandKits} activeId={activeBrandKitId} scene={scene} selectedIds={selected} disabled={disabled}
+              onSelectKit={onSelectBrandKit} onSaveAsset={onSaveBrandAsset} onChange={(recipe) => {
+                const target = current.current.pages.find((item) => item.id === page.id);
+                if (target) {
+                  const live = target.canvas ?? sceneForPage(target, current.current.format);
+                  const next = recipe(live);
+                  if (next !== live) changeScene(next);
+                }
+              }} onApply={applyBrand} onManage={onManageBrand}
+              onInsert={(asset) => {
+                const ratio = Math.min(280 / asset.width, (canvasHeight * .65) / asset.height);
+                const width = Math.max(1, asset.width * ratio);
+                const height = Math.max(1, asset.height * ratio);
+                addElement(createCanvasElement("image", {name:asset.name, src:asset.src, fit:"contain", x:(360-width)/2, y:(canvasHeight-height)/2, width,height}));
+              }} />}
             {tab === "layers" && (
               <>
                 <div className="te-panel-heading">
@@ -909,6 +1037,7 @@ export function DesignEditor({
                   {[...scene.elements].reverse().map((e) => (
                     <div
                       key={e.id}
+                      onContextMenu={(event) => canvasMenu(event, e.id)}
                       className={selected.includes(e.id) ? "is-active" : ""}
                     >
                       <button
@@ -937,6 +1066,7 @@ export function DesignEditor({
                             : e.name}
                         </span>
                       </button>
+                      <button className="te-icon te-layer-more" aria-label={`Actions for ${e.name}`} aria-haspopup="menu" onClick={(event) => canvasMenu(event, e.id)}>•••</button>
                       <button
                         className="te-icon"
                         title={e.locked ? "Unlock layer" : "Lock layer"}
@@ -1001,6 +1131,11 @@ export function DesignEditor({
           </fieldset>
         </aside>
         <main className="te-canvas-column">
+          <QuickToolbar scene={scene} selectedIds={selected} disabled={disabled} onChange={changeScene}
+            onDuplicate={() => applyCommand((live) => duplicateSelection(live, selected))}
+            onDelete={() => applyCommand((live) => removeSelection(live, selected))}
+            onMore={(event) => selected.length ? openMenu(event, {label: "Selected elements", items: elementMenu(selected)}) : canvasMenu(event, null)}
+            onAddText={() => addText()} onUpload={() => fileRef.current?.click()} />
           <div className="te-canvas-toolbar">
             <label>
               Resize
@@ -1033,7 +1168,7 @@ export function DesignEditor({
             <span className="te-selection-hint">
               {selected.length
                 ? `${selected.length} selected · Shift-click for more`
-                : "Click to select · Double-click to edit"}
+                : "Drag to select · Double-click text to edit"}
             </span>
             <button
               className="te-text-button te-properties-trigger"
@@ -1093,6 +1228,8 @@ export function DesignEditor({
                     onSelect={setSelected}
                     onChange={changeScene}
                     disabled={disabled}
+                    onContextMenu={canvasMenu}
+                    editingRequest={editingRequest}
                   />
                 ) : (
                   <div className="te-legacy-canvas">
@@ -1181,7 +1318,7 @@ export function DesignEditor({
                   title="Delete page"
                   aria-label="Delete page"
                   disabled={disabled || design.pages.length <= 1}
-                  onClick={() => setRemoveOpen(true)}
+                  onClick={() => setRemovePageId(page.id)}
                 >
                   <TrashIcon />
                 </button>
@@ -1189,6 +1326,7 @@ export function DesignEditor({
             </div>
             <div className="te-page-strip">
               {design.pages.map((p, i) => (
+                <div key={p.id} className="te-page-card" onContextMenu={(event) => pageMenu(event, p)}>
                 <button
                   draggable={!disabled}
                   onDragStart={() => setDragged(p.id)}
@@ -1217,6 +1355,8 @@ export function DesignEditor({
                   <DesignPreview design={design} page={p} />
                   <span>{i + 1}</span>
                 </button>
+                <button className="te-page-more" aria-label={`Page ${i + 1} actions`} aria-haspopup="menu" onClick={(event) => pageMenu(event, p)}>•••</button>
+                </div>
               ))}
               <button
                 className="te-add-page"
@@ -1233,6 +1373,16 @@ export function DesignEditor({
           <fieldset disabled={disabled}>{inspector}</fieldset>
         </aside>
       </div>
+      {renameLayer && <Modal title="Rename layer" onClose={() => setRenameLayer(null)}>
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          changeScene({...scene, elements: scene.elements.map((element) => element.id === renameLayer.id ? {...element, name: renameLayer.name.trim() || element.name} : element)});
+          setRenameLayer(null);
+        }}>
+          <label className="te-field">Layer name<input autoFocus required maxLength={100} value={renameLayer.name} onChange={(event) => setRenameLayer({...renameLayer, name: event.target.value})} /></label>
+          <div className="te-modal-actions"><button type="button" className="te-button" onClick={() => setRenameLayer(null)}>Cancel</button><button className="te-button te-primary" disabled={disabled}>Save name</button></div>
+        </form>
+      </Modal>}
       {showShortcuts && (
         <Modal
           title="Keyboard shortcuts"
@@ -1245,7 +1395,10 @@ export function DesignEditor({
               ["⌘/Ctrl Z", "Undo"],
               ["⌘/Ctrl Shift Z", "Redo"],
               ["⌘/Ctrl D", "Duplicate selected"],
-              ["⌘/Ctrl C / V", "Copy / paste elements"],
+              ["⌘/Ctrl C / X / V", "Copy / cut / paste elements"],
+              ["⌘/Ctrl [ / ]", "Send backward / bring forward"],
+              ["Shift F10", "Open actions menu"],
+              ["Drag empty canvas", "Select multiple elements"],
               ["⌘/Ctrl A", "Select all unlocked elements"],
               ["Arrow keys", "Move selected elements"],
               ["Shift + arrows", "Move in larger steps"],
@@ -1274,6 +1427,7 @@ export function DesignEditor({
             onSubmit={(e) => {
               e.preventDefault();
               try {
+                if (blocked.current) return;
                 onSaveTemplate(
                   designAsTemplate(design, templateName.trim() || design.name),
                 );
@@ -1319,14 +1473,14 @@ export function DesignEditor({
           </form>
         </Modal>
       )}
-      {removeOpen && (
+      {removePageId && (
         <Modal
-          title={`Delete page ${index + 1}?`}
-          onClose={() => setRemoveOpen(false)}
+          title={`Delete page ${design.pages.findIndex((p) => p.id === removePageId) + 1}?`}
+          onClose={() => setRemovePageId(null)}
         >
           <p>You can restore this page with Undo.</p>
           <div className="te-modal-actions">
-            <button className="te-button" onClick={() => setRemoveOpen(false)}>
+            <button className="te-button" onClick={() => setRemovePageId(null)}>
               Cancel
             </button>
             <button
@@ -1334,10 +1488,11 @@ export function DesignEditor({
               onClick={() => {
                 commit((d) => ({
                   ...d,
-                  pages: d.pages.filter((p) => p.id !== page.id),
+                  pages: d.pages.filter((p) => p.id !== removePageId),
                 }));
-                setPageId(design.pages[Math.max(0, index - 1)].id);
-                setRemoveOpen(false);
+                if (page.id === removePageId) setPageId(design.pages.find((p) => p.id !== removePageId)!.id);
+                setSelected([]);
+                setRemovePageId(null);
               }}
             >
               Delete page

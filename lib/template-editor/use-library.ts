@@ -8,6 +8,7 @@ import {
   type SetStateAction,
 } from "react";
 import { EMPTY_LIBRARY, parseLibrary, type EditorLibrary } from "./model";
+import { checkLibrarySaveBudget } from "./library-budget";
 
 export type LibrarySaveStatus =
   | "loading"
@@ -162,6 +163,7 @@ export function useEditorLibrary() {
   const [canEdit, setCanEdit] = useState(false);
   const [status, setStatus] = useState<LibrarySaveStatus>("loading");
   const [error, setError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const current = useRef(library);
   const revision = useRef<string | null>(null);
   const storage = useRef<Storage>("cloud");
@@ -255,7 +257,10 @@ export function useEditorLibrary() {
           unknown
         > | null;
         if (!result.ok) {
-          if (result.status === 409) conflict.current = true;
+          if (result.status === 409) {
+            conflict.current = true;
+            if (mounted.current) setCanEdit(false);
+          }
           throw new Error(
             responseError(data, "The server could not save this library."),
           );
@@ -328,6 +333,7 @@ export function useEditorLibrary() {
       setCanEdit(false);
       setStatus("loading");
       setError(null);
+      setMutationError(null);
     }
     const discardedOwn = {
       key: `${scope.current}:${tabId.current}`,
@@ -393,7 +399,7 @@ export function useEditorLibrary() {
       loaded.current = true;
       if (mounted.current) {
         updateLibrary(current.current);
-        setCanEdit(true);
+        setCanEdit(!conflict.current);
         setReady(true);
         setStatus(
           conflict.current
@@ -406,7 +412,7 @@ export function useEditorLibrary() {
         );
         setError(
           conflict.current
-            ? "Recovered browser edits differ from the server. Export a JSON backup to keep them, then choose Reload server, or continue editing this recovered copy."
+            ? "Recovered browser edits differ from the server. Export a JSON backup to keep them, then choose Load saved version before editing."
             : backupFailure.current
               ? "Browser recovery is unavailable. Server saving is available; keep this tab open until edits finish saving."
               : null,
@@ -440,10 +446,27 @@ export function useEditorLibrary() {
   }, [load]);
 
   const setLibrary = useCallback(
-    (next: SetStateAction<EditorLibrary>) => {
-      if (!loaded.current) return;
-      const value = typeof next === "function" ? next(current.current) : next;
-      if (value === current.current) return;
+    (next: SetStateAction<EditorLibrary>): boolean => {
+      if (!loaded.current || conflict.current || !mounted.current) return false;
+      let value: EditorLibrary;
+      try {
+        value = typeof next === "function" ? next(current.current) : next;
+      } catch (reason) {
+        setMutationError(reason instanceof Error ? reason.message : "This change could not be applied. Your current library has been kept.");
+        return false;
+      }
+      if (value === current.current) {
+        setMutationError(null);
+        return true;
+      }
+      const budget = checkLibrarySaveBudget(value);
+      if (!budget.ok) {
+        // A rejected edit never touches the library, history, recovery copy,
+        // dirty stamp, or scheduled save. Editing remains available for cleanup.
+        setMutationError(budget.error);
+        return false;
+      }
+      setMutationError(null);
       current.current = value;
       stamp.current = crypto.randomUUID();
       dirty.current = true;
@@ -458,6 +481,7 @@ export function useEditorLibrary() {
         timer.current = setTimeout(() => {
           void saveRef.current();
         }, 600);
+      return true;
     },
     [persistRecovery],
   );
@@ -520,7 +544,7 @@ export function useEditorLibrary() {
     ready,
     canEdit,
     status,
-    error,
+    error: mutationError ?? error,
     setLibrary,
     retrySave,
     reloadServer,

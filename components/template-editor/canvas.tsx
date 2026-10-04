@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
@@ -29,6 +30,15 @@ type Gesture = {
   ids: string[];
   bounds: Box;
   handle?: Handle;
+  moved: boolean;
+};
+type Marquee = {
+  pointer: number;
+  capture: HTMLElement;
+  start: Point;
+  source: CanvasScene;
+  previousIds: string[];
+  baseIds: string[];
   moved: boolean;
 };
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -59,6 +69,48 @@ function bounded(element: CanvasElement): CanvasElement {
     width: round(clamp(element.width, 1, 10_000)),
     height: round(clamp(element.height, 1, 10_000)),
   };
+}
+
+/** Uploads can complete during a gesture. Preserve the latest layer list and
+ * content, and apply only fields that this gesture actually transformed. */
+function mergeGesture(scene: CanvasScene, active: Gesture): CanvasScene {
+  const originals = new Map(active.source.elements.map((element) => [element.id, element]));
+  const transformed = new Map(active.latest.elements.map((element) => [element.id, element]));
+  const selected = new Set(active.ids);
+  let changed = false;
+  const elements = scene.elements.map((element) => {
+    if (!selected.has(element.id) || element.locked) return element;
+    const original = originals.get(element.id), next = transformed.get(element.id);
+    if (!original || !next || original.type !== element.type || next.type !== element.type) return element;
+    const replacement = { ...element };
+    let modified = false;
+    for (const key of ["x", "y", "width", "height", "rotation"] as const) {
+      if (next[key] !== original[key] && next[key] !== element[key]) {
+        replacement[key] = next[key];
+        modified = true;
+      }
+    }
+    if (replacement.type === "text" && original.type === "text" && next.type === "text") {
+      for (const key of ["fontSize", "letterSpacing"] as const) {
+        if (next[key] !== original[key] && next[key] !== replacement[key]) {
+          replacement[key] = next[key];
+          modified = true;
+        }
+      }
+    }
+    if (replacement.type !== "text" && original.type !== "text" && next.type !== "text" && next.radius !== original.radius && next.radius !== replacement.radius) {
+      replacement.radius = next.radius;
+      modified = true;
+    }
+    if (replacement.type === "shape" && original.type === "shape" && next.type === "shape" && next.strokeWidth !== original.strokeWidth && next.strokeWidth !== replacement.strokeWidth) {
+      replacement.strokeWidth = next.strokeWidth;
+      modified = true;
+    }
+    if (!modified) return element;
+    changed = true;
+    return replacement;
+  });
+  return changed ? { ...scene, elements } : scene;
 }
 
 function rotate(point: Point, degrees: number): Point {
@@ -175,6 +227,26 @@ function selectionBounds(elements: CanvasElement[], rotatedSingle = true): Box {
     height: Math.max(...points.map((point) => point.y)) - top,
     rotation: 0,
   };
+}
+
+/** Rectangle intersection in each box's axes avoids selecting the empty
+ * corners around rotated artwork when drawing a selection rectangle. */
+function intersectsMarquee(element: CanvasElement, area: Box): boolean {
+  const midpoint = center(element);
+  const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([x, y]) => {
+    const offset = rotate({ x: x * element.width / 2, y: y * element.height / 2 }, element.rotation);
+    return { x: midpoint.x + offset.x, y: midpoint.y + offset.y };
+  });
+  const rectangle = [
+    { x: area.x, y: area.y }, { x: area.x + area.width, y: area.y },
+    { x: area.x + area.width, y: area.y + area.height }, { x: area.x, y: area.y + area.height },
+  ];
+  const axes = [{ x: 1, y: 0 }, { x: 0, y: 1 }, rotate({ x: 1, y: 0 }, element.rotation), rotate({ x: 0, y: 1 }, element.rotation)];
+  return axes.every((axis) => {
+    const first = corners.map((point) => point.x * axis.x + point.y * axis.y);
+    const second = rectangle.map((point) => point.x * axis.x + point.y * axis.y);
+    return Math.max(...first) >= Math.min(...second) && Math.max(...second) >= Math.min(...first);
+  });
 }
 
 function resizeSingle(
@@ -297,6 +369,8 @@ type CanvasEditorProps = {
   selectedIds: string[];
   onSelect: (ids: string[]) => void;
   onChange: (scene: CanvasScene, group?: string) => void;
+  onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>, targetId: string | null) => void;
+  editingRequest?: { id: string; serial: number };
   disabled?: boolean;
 };
 
@@ -307,16 +381,21 @@ export function CanvasEditor({
   selectedIds,
   onSelect,
   onChange,
+  onContextMenu,
+  editingRequest,
   disabled = false,
 }: CanvasEditorProps) {
   const root = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
+  const marquee = useRef<Marquee | null>(null);
+  const lastEditingRequest = useRef<string | null>(null);
   const editingNode = useRef<HTMLDivElement>(null);
   const editingActive = useRef<string | null>(null);
   const editingOriginal = useRef<TextElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingSeed, setEditingSeed] = useState("");
   const [live, setLive] = useState<CanvasScene | null>(null);
+  const [selectionArea, setSelectionArea] = useState<Box | null>(null);
   const [guides, setGuides] = useState({ x: false, y: false });
   const currentScene = live ?? scene;
   const selected = currentScene.elements.filter((element) =>
@@ -342,9 +421,31 @@ export function CanvasEditor({
   useEffect(
     () => () => {
       gesture.current = null;
+      marquee.current = null;
     },
     [],
   );
+
+  useEffect(() => {
+    if (!editingRequest || disabled) return;
+    const request = `${editingRequest.id}:${editingRequest.serial}`;
+    if (lastEditingRequest.current === request) return;
+    const element = scene.elements.find((item) => item.id === editingRequest.id);
+    if (element?.type !== "text" || element.locked) return;
+    let cancelled = false;
+    // Defer until a context menu has released its focus and restored the
+    // canvas. Repeated scene changes during typing do not restart editing.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      lastEditingRequest.current = request;
+      onSelect([element.id]);
+      editingActive.current = element.id;
+      editingOriginal.current = element;
+      setEditingSeed(element.text);
+      setEditingId(element.id);
+    });
+    return () => { cancelled = true; };
+  }, [editingRequest, scene, disabled, onSelect]);
 
   function position(event: { clientX: number; clientY: number }): Point {
     const bounds = root.current!.getBoundingClientRect();
@@ -475,7 +576,64 @@ export function CanvasEditor({
     begin(event, "move", next);
   }
 
+  function beginMarquee(event: ReactPointerEvent<HTMLDivElement>) {
+    if (disabled || event.button !== 0 || gesture.current || marquee.current) return;
+    event.preventDefault();
+    const source = finishEditing();
+    const capture = event.currentTarget;
+    const point = position(event);
+    root.current?.focus({ preventScroll: true });
+    capture.setPointerCapture(event.pointerId);
+    marquee.current = {
+      pointer: event.pointerId, capture,
+      start: { x: clamp(point.x, 0, width), y: clamp(point.y, 0, height) },
+      source, previousIds: [...selectedIds], baseIds: event.shiftKey ? [...selectedIds] : [], moved: false,
+    };
+    if (!event.shiftKey) onSelect([]);
+  }
+
+  function endMarquee(cancel = false) {
+    const active = marquee.current;
+    if (!active) return;
+    marquee.current = null;
+    if (active.capture.hasPointerCapture(active.pointer)) active.capture.releasePointerCapture(active.pointer);
+    setSelectionArea(null);
+    if (cancel) onSelect(active.previousIds);
+  }
+
+  function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!onContextMenu || disabled) return;
+    const target = event.target instanceof Element ? event.target : null;
+    // The tool-wide provider preserves text selection and its editing menu.
+    if (target?.closest("[contenteditable=true]")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    end(true);
+    endMarquee(true);
+    finishEditing();
+    const hitId = target?.closest<HTMLElement>("[data-layer-id]")?.dataset.layerId;
+    const targetId = hitId ?? (target?.closest("[data-canvas-selection]") ? selectedIds[0] : null) ?? null;
+    if (targetId && scene.elements.some((element) => element.id === targetId)) {
+      if (!selectedIds.includes(targetId)) onSelect([targetId]);
+    } else onSelect([]);
+    onContextMenu(event, targetId);
+  }
+
   function move(event: ReactPointerEvent) {
+    const selecting = marquee.current;
+    if (selecting && selecting.pointer === event.pointerId) {
+      event.preventDefault();
+      const point = position(event);
+      const x = clamp(point.x, 0, width), y = clamp(point.y, 0, height);
+      const viewScale = root.current!.getBoundingClientRect().width / width;
+      if (!selecting.moved && Math.hypot(x - selecting.start.x, y - selecting.start.y) * viewScale < 3) return;
+      selecting.moved = true;
+      const area = { x: Math.min(selecting.start.x, x), y: Math.min(selecting.start.y, y), width: Math.abs(x - selecting.start.x), height: Math.abs(y - selecting.start.y), rotation: 0 };
+      setSelectionArea(area);
+      const hitIds = selecting.source.elements.filter((element) => !element.locked && intersectsMarquee(element, area)).map((element) => element.id);
+      onSelect([...new Set([...selecting.baseIds, ...hitIds])]);
+      return;
+    }
     const active = gesture.current;
     if (!active || active.pointer !== event.pointerId) return;
     event.preventDefault();
@@ -563,7 +721,10 @@ export function CanvasEditor({
       active.capture.releasePointerCapture(active.pointer);
     setLive(null);
     setGuides({ x: false, y: false });
-    if (!cancel && active.moved && !disabled) onChange(active.latest);
+    if (!cancel && active.moved && !disabled) {
+      const next = mergeGesture(scene, active);
+      if (next !== scene) onChange(next);
+    }
   }
 
   // Editing uses the same typography and box styles as the saved renderer.
@@ -580,29 +741,27 @@ export function CanvasEditor({
   return (
     <div
       ref={root}
-      className={`te-canvas-editor${disabled ? " is-disabled" : ""}${live ? " is-transforming" : ""}`}
+      className={`te-canvas-editor${disabled ? " is-disabled" : ""}${live ? " is-transforming" : ""}${selectionArea ? " is-selecting" : ""}`}
       style={{ width, height }}
       role="region"
       aria-label="Design canvas"
       tabIndex={0}
-      onPointerDown={(event) => {
-        if (disabled || event.button !== 0) return;
-        finishEditing();
-        if (!event.shiftKey) onSelect([]);
-        root.current?.focus({ preventScroll: true });
-      }}
+      onPointerDown={beginMarquee}
+      onContextMenu={openContextMenu}
       onPointerMove={move}
       onPointerUp={(event) => {
         if (gesture.current?.pointer === event.pointerId) end();
+        if (marquee.current?.pointer === event.pointerId) endMarquee();
       }}
-      onPointerCancel={() => end(true)}
-      onLostPointerCapture={() => end(true)}
+      onPointerCancel={() => { end(true); endMarquee(true); }}
+      onLostPointerCapture={() => { end(true); endMarquee(true); }}
       onKeyDown={(event) => {
-        if (gesture.current) {
+        if (gesture.current || marquee.current) {
           event.stopPropagation();
           if (event.key === "Escape") {
             event.preventDefault();
             end(true);
+            endMarquee(true);
           }
           return;
         }
@@ -630,6 +789,7 @@ export function CanvasEditor({
             aria-disabled={disabled}
             className={`te-canvas-hit${element.locked ? " is-locked" : ""}${selectedIds.includes(element.id) ? " is-selected" : ""}`}
             data-layer-id={element.id}
+            title={element.locked ? `${element.name || element.type} · Locked` : `${element.name || element.type} · Drag to move${element.type === "text" ? " · Double-click to edit" : ""} · Right-click for actions`}
             style={boxStyle(element)}
             onPointerDown={(event) => selectElement(event, element)}
             onDoubleClick={(event) => {
@@ -679,7 +839,10 @@ export function CanvasEditor({
             aria-multiline="true"
             spellCheck
             onInput={() => updateEditing()}
-            onBlur={() => finishEditing()}
+            onBlur={(event) => {
+              if (event.relatedTarget instanceof Element && event.relatedTarget.closest('[role="menu"]')) return;
+              finishEditing();
+            }}
             onKeyDown={(event) => {
               event.stopPropagation();
               if (
@@ -736,16 +899,17 @@ export function CanvasEditor({
       {selectionBox && (
         <div
           className={`te-canvas-outline${selected.some((element) => element.locked) ? " is-locked" : ""}`}
+          data-canvas-selection="true"
           style={boxStyle(selectionBox)}
         >
-          {selected.length === 1 && (
+          {!selectionArea && (
             <span className="te-canvas-layer-label">
-              {selected[0].locked ? "Locked · " : ""}
-              {selected[0].name || selected[0].type}
+              {selected.length === 1 ? `${selected[0].locked ? "Locked · " : ""}${selected[0].name || selected[0].type}` : `${selected.length} layers selected`}
             </span>
           )}
           {!disabled &&
             !editingId &&
+            !selectionArea &&
             selected.every((element) => !element.locked) && (
               <>
                 {(selected.length > 1
@@ -791,6 +955,9 @@ export function CanvasEditor({
             )}
         </div>
       )}
+      {selectionArea && <div className="te-canvas-marquee" style={boxStyle(selectionArea)} aria-hidden>
+        <span>{selected.length} selected</span>
+      </div>}
       {guides.x && (
         <div
           className="te-canvas-guide te-canvas-guide-x"
@@ -804,8 +971,9 @@ export function CanvasEditor({
         />
       )}
       <span className="te-canvas-screen-reader">
-        Drag layers to move them. Double-click text to edit. Shift-click to
-        select multiple layers. Escape cancels a transformation.
+        Drag layers to move them. Drag empty canvas to select layers. Hold Shift
+        to add to the selection. Double-click text to edit. Right-click for
+        actions. Escape cancels a transformation or selection.
       </span>
     </div>
   );

@@ -614,7 +614,7 @@ export function ElementInspector({
                     onClick={() =>
                       update("uppercase", (element) =>
                         element.type === "text"
-                          ? { ...element, text: element.text.toUpperCase() }
+                          ? { ...element, text: element.text.toUpperCase().slice(0, 20_000) }
                           : element,
                       )
                     }
@@ -628,7 +628,7 @@ export function ElementInspector({
                     onClick={() =>
                       update("lowercase", (element) =>
                         element.type === "text"
-                          ? { ...element, text: element.text.toLowerCase() }
+                          ? { ...element, text: element.text.toLowerCase().slice(0, 20_000) }
                           : element,
                       )
                     }

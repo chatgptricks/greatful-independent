@@ -91,11 +91,32 @@ export type BrandKit = {
   background: string;
   text: string;
 };
+export type BrandAsset = {
+  id: string;
+  name: string;
+  src: string;
+  width: number;
+  height: number;
+  kind: "logo" | "image";
+};
+export type SavedBrandKit = BrandKit & {
+  id: string;
+  palette: string[];
+  assets: BrandAsset[];
+};
+export const MAX_BRAND_KITS = 20;
+export const MAX_BRAND_ASSETS = 40;
+export const MAX_BRAND_COLORS = 20;
+export const MAX_BRAND_ASSET_CHARS = 2_000_000;
+export const DEFAULT_BRAND_KIT_ID = "brand-default";
 export type EditorLibrary = {
   version: 1;
   designs: DesignDocument[];
   templates: DesignTemplate[];
+  /** Compatibility projection of the active kit. Update kits via withBrandKits. */
   brand: BrandKit;
+  brandKits: SavedBrandKit[];
+  activeBrandKitId: string;
 };
 
 export const DEFAULT_BRAND: BrandKit = {
@@ -109,7 +130,46 @@ export const EMPTY_LIBRARY: EditorLibrary = {
   designs: [],
   templates: [],
   brand: { ...DEFAULT_BRAND },
+  brandKits: [{ ...DEFAULT_BRAND, id: DEFAULT_BRAND_KIT_ID, palette: [DEFAULT_BRAND.background, DEFAULT_BRAND.text], assets: [] }],
+  activeBrandKitId: DEFAULT_BRAND_KIT_ID,
 };
+
+function brandProjection(kit: BrandKit): BrandKit {
+  return { name: kit.name, font: kit.font, background: kit.background, text: kit.text };
+}
+
+/** Returns detached kit objects, including migration of a legacy in-memory library. */
+export function libraryBrandKits(library: EditorLibrary): SavedBrandKit[] {
+  if (library.brandKits?.length) return library.brandKits.map(kit => ({
+    ...kit,
+    palette: [...kit.palette],
+    assets: kit.assets.map(asset => ({ ...asset })),
+  }));
+  return [{ ...brandProjection(library.brand), id: DEFAULT_BRAND_KIT_ID, palette: [library.brand.background, library.brand.text], assets: [] }];
+}
+
+export function activeBrandKit(library: EditorLibrary): SavedBrandKit {
+  const kits = libraryBrandKits(library);
+  return kits.find(kit => kit.id === library.activeBrandKitId) ?? kits[0];
+}
+
+export function createBrandKit(name = "My brand", base: BrandKit = DEFAULT_BRAND): SavedBrandKit {
+  return {
+    ...brandProjection(base),
+    id: crypto.randomUUID(),
+    name: name.trim().slice(0, 200) || "Untitled brand",
+    palette: Array.from(new Set([base.background, base.text])),
+    assets: [],
+  };
+}
+
+/** The single write path keeps the active-kit projection in sync with its source. */
+export function withBrandKits(library: EditorLibrary, kits: SavedBrandKit[], activeId = library.activeBrandKitId): EditorLibrary {
+  const parsed = parseBrandKits(kits);
+  if (!parsed) throw new Error("Use 1–20 valid brand kits, with at most 20 colors and 40 images per kit.");
+  const active = parsed.find(kit => kit.id === activeId) ?? parsed[0];
+  return { ...library, brand: brandProjection(active), brandKits: parsed, activeBrandKitId: active.id };
+}
 export const TEMPLATE_CATEGORIES = [
   "All",
   "Editorial",
@@ -1061,6 +1121,36 @@ function parseStyle(value: unknown): SlideStyle | null {
   return style;
 }
 
+function parseBrand(value: unknown): BrandKit | null {
+  if (!object(value) || !string(value.name, 200) || typeof value.font !== "string" || !FONT_IDS.has(value.font) || !color(value.background) || !color(value.text)) return null;
+  return { name: value.name, font: value.font, background: value.background, text: value.text };
+}
+
+function parseBrandKits(value: unknown): SavedBrandKit[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_BRAND_KITS) return null;
+  const kits: SavedBrandKit[] = [];
+  const ids = new Set<string>();
+  for (const candidate of value) {
+    const brand = parseBrand(candidate);
+    if (!brand || !object(candidate) || !identity(candidate.id) || ids.has(candidate.id) ||
+      !Array.isArray(candidate.palette) || candidate.palette.length > MAX_BRAND_COLORS || !candidate.palette.every(color) ||
+      !Array.isArray(candidate.assets) || candidate.assets.length > MAX_BRAND_ASSETS) return null;
+    const assets: BrandAsset[] = [];
+    const assetIds = new Set<string>();
+    for (const asset of candidate.assets) {
+      if (!object(asset) || !identity(asset.id) || assetIds.has(asset.id) || !string(asset.name, 200) ||
+        !string(asset.src, MAX_BRAND_ASSET_CHARS) || !safeImageUrl(asset.src) ||
+        !numberIn(asset.width, 1, 100_000) || !numberIn(asset.height, 1, 100_000) ||
+        (asset.kind !== "logo" && asset.kind !== "image")) return null;
+      assets.push({ id: asset.id, name: asset.name, src: asset.src, width: asset.width, height: asset.height, kind: asset.kind });
+      assetIds.add(asset.id);
+    }
+    kits.push({ ...brand, id: candidate.id, palette: [...candidate.palette], assets });
+    ids.add(candidate.id);
+  }
+  return kits;
+}
+
 function safeImageUrl(value: unknown): value is string {
   if (!string(value, MAX_IMAGE_CHARS) || !value) return false;
   if (value.startsWith("data:")) {
@@ -1302,25 +1392,21 @@ export function parseLibrary(input: unknown): EditorLibrary | null {
       !object(input.brand)
     )
       return null;
-    const b = input.brand;
-    if (
-      !string(b.name, 200) ||
-      typeof b.font !== "string" ||
-      !FONT_IDS.has(b.font) ||
-      !color(b.background) ||
-      !color(b.text)
-    )
-      return null;
+    const b = parseBrand(input.brand);
+    if (!b) return null;
+    const kits = input.brandKits === undefined
+      ? [{ ...b, id: DEFAULT_BRAND_KIT_ID, palette: Array.from(new Set([b.background, b.text])), assets: [] }]
+      : parseBrandKits(input.brandKits);
+    const activeId = input.activeBrandKitId;
+    if (!kits || (activeId !== undefined && (!identity(activeId) || !kits.some(kit => kit.id === activeId)))) return null;
+    const active = kits.find(kit => kit.id === activeId) ?? kits[0];
     const library: EditorLibrary = {
       version: 1,
       designs: [],
       templates: [],
-      brand: {
-        name: b.name,
-        font: b.font,
-        background: b.background,
-        text: b.text,
-      },
+      brand: brandProjection(active),
+      brandKits: kits,
+      activeBrandKitId: active.id,
     };
     const designIds = new Set<string>();
     const templateIds = new Set<string>();
