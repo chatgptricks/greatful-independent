@@ -152,7 +152,7 @@ export function DesignEditor({
   const canvasWidth = FRAME_WIDTH * (continuous ? design.pages.length : 1);
   const scene = design.continuousCanvas ?? page.canvas ?? sceneForPage(page, design.format);
   const previousPage = !continuous && index > 0 ? design.pages[index - 1] : undefined;
-  const onionScene = onionSkin && previousPage ? previousPage.canvas ?? sceneForPage(previousPage, design.format) : undefined;
+  const onionScene = onionSkin && page.canvas && previousPage ? previousPage.canvas ?? sceneForPage(previousPage, design.format) : undefined;
   const selectedImage = selected.length === 1 ? scene.elements.find((element) => element.id === selected[0] && element.type === "image") : undefined;
   const scale = Math.max(0.005, fit) * zoom;
   // Only committed geometry changes the scrollable area; dragging never moves
@@ -1174,8 +1174,8 @@ export function DesignEditor({
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" /><path d="M9 9h6v6H9z" /></svg>
               Clip to canvas <span>{clipToCanvas ? "On" : "Off"}</span>
             </button>
-            {!continuous && <button className="te-clip-toggle te-onion-toggle" aria-pressed={onionSkin} disabled={!previousPage}
-              title={previousPage ? "Show the previous slide behind this one as a transparent alignment guide. Never included in exports." : "Onion skin is available from slide 2"}
+            {!continuous && <button className="te-clip-toggle te-onion-toggle" aria-pressed={Boolean(onionScene)} disabled={!previousPage || !page.canvas}
+              title={!page.canvas ? "Choose Edit individual elements to use onion skin on this older layout" : previousPage ? "Show the previous slide behind this one as a transparent alignment guide. Never included in exports." : "Onion skin is available from slide 2"}
               onClick={() => setOnionSkin((value) => !value)}>
               <CopyIcon size={14} /> Onion skin
             </button>}
