@@ -50,7 +50,7 @@ Choose **Layout → Continuous carousel** inside any design, or select it when c
 
 The **Layers** panel includes previews, name/type search, inline rename, show/hide, lock/unlock, multiple selection, drag reordering, move up/down, duplicate, and delete. Double-click a layer name or press **F2** to rename; **Alt+↑/↓** changes stacking order. Hidden layers are omitted from canvas, previews, and exports, but remain saved and can be shown again.
 
-For separate slides, **Onion skin** shows the previous slide behind the current artwork at 5–50% opacity. It is available from slide two and helps align text, logos, and other recurring elements. The overlay cannot be selected and is never saved into the artwork or exported.
+For separate slides, **Onion skin** shows the previous slide behind the current artwork at 5–50% opacity. It is available from slide two on editable-layer pages (convert older layouts with **Edit individual elements**) and helps align text, logos, and other recurring elements. The overlay cannot be selected and is never saved into the artwork or exported.
 
 ## Brand kits and reusable elements
 
