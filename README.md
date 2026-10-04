@@ -40,6 +40,18 @@ Upload JPG, PNG, or WebP images up to 15 MB. The editor resizes uploads to a max
 
 The current editor supports up to 100 elements per page, 20 pages per design, 150 designs, and 80 custom templates. The complete save request has a 12 MB limit; embedded images count toward it. This editor exports still images. The preserved research workspace retains its existing video tools.
 
+## Continuous carousels, workspace, and layers
+
+Choose **Layout → Continuous carousel** inside any design, or select it when creating a template. It starts with at least two slides and supports up to 20. All slides share one wide canvas, with visible slice boundaries; images and text can span any number of slides. Add slides at the end. Select an image, choose **From / Through**, and use **Fill slides** to cover that range with one image. Uploads in this mode retain up to 8192 pixels along their longest edge, subject to the existing embedded-image and library limits.
+
+**Export → All pages** always downloads separate numbered PNGs in a ZIP, each at the selected format's resolution. The continuous scene uses exact page-width offsets, so adjoining slices match. Slide dividers, selection outlines, clipping controls, and onion skin are editor guides and never appear in exports. Continuous templates, copies, backups, and autosave retain the shared canvas. Switch back to **Separate slides** to create independent editable copies of crossing layers. Combining existing pages preserves their artwork and backgrounds; it requires at most 100 total layers. Undo restores either conversion. Continuous mode can remove the last boundary down to two slides; its artwork stays on the workspace.
+
+**Clip to canvas** clips layers that overlap the page (including rotated layers), while fully outside layers stay visible and movable in the surrounding scrollable workspace. Turn it off to see all overflow. Exported images always use the page boundaries. **Fit page** returns to the canvas; Layers shows **Outside page → Locate** for parked artwork.
+
+The **Layers** panel includes previews, name/type search, inline rename, show/hide, lock/unlock, multiple selection, drag reordering, move up/down, duplicate, and delete. Double-click a layer name or press **F2** to rename; **Alt+↑/↓** changes stacking order. Hidden layers are omitted from canvas, previews, and exports, but remain saved and can be shown again.
+
+For separate slides, **Onion skin** shows the previous slide behind the current artwork at 5–50% opacity. It is available from slide two and helps align text, logos, and other recurring elements. The overlay cannot be selected and is never saved into the artwork or exported.
+
 ## Brand kits and reusable elements
 
 Create and switch between up to 20 brand kits. Each kit keeps its name, font, default background/text colors, up to 20 palette colors, and 40 reusable logos/images. Upload PNG, JPG, or WebP files; transparency is preserved. Asset menus support renaming, categorizing as a logo/image, and removal. Removing a kit asset leaves images already used in designs intact.

@@ -5,12 +5,13 @@ import type { BrandAsset, SavedBrandKit, CanvasScene } from "@/lib/template-edit
 import { proxied } from "@/lib/grateful-future/util";
 import { useContextMenu } from "./context-menu";
 
-export function BrandPanel({ kits, activeId, scene, selectedIds, disabled, onSelectKit, onInsert, onSaveAsset, onChange, onApply, onManage }: {
+export function BrandPanel({ kits, activeId, scene, selectedIds, disabled, continuous = false, onSelectKit, onInsert, onSaveAsset, onChange, onApply, onManage }: {
   kits: SavedBrandKit[];
   activeId: string;
   scene: CanvasScene;
   selectedIds: string[];
   disabled: boolean;
+  continuous?: boolean;
   onSelectKit: (id: string) => void;
   onInsert: (asset: BrandAsset) => void;
   onSaveAsset: (asset: BrandAsset, kitId: string) => boolean | void;
@@ -38,15 +39,15 @@ export function BrandPanel({ kits, activeId, scene, selectedIds, disabled, onSel
       </select>
     </label>
     <div className="te-brand-palette" aria-label="Brand colors">
-      {Array.from(new Set([kit.background, kit.text, ...kit.palette])).map((color) => <button key={color} aria-label={`Apply brand color ${color}`} title={`${color} · Apply to selected text or shape, or page background`} disabled={disabled || !canColor} style={{background: color}} onClick={() => applyColor(color)} onContextMenu={(event) => openMenu(event, {label: color, items:[{id:"apply", label:"Apply to selection or background", disabled, onSelect:() => applyColor(color)}, {id:"background", label:"Use as page background", disabled, onSelect:() => onChange((live) => ({...live, background:color}))}]})} />)}
+      {Array.from(new Set([kit.background, kit.text, ...kit.palette])).map((color) => <button key={color} aria-label={`Apply brand color ${color}`} title={`${color} · Apply to selected text or shape, or ${continuous ? "carousel" : "page"} background`} disabled={disabled || !canColor} style={{background: color}} onClick={() => applyColor(color)} onContextMenu={(event) => openMenu(event, {label: color, items:[{id:"apply", label:"Apply to selection or background", disabled, onSelect:() => applyColor(color)}, {id:"background", label:continuous ? "Use as carousel background" : "Use as page background", disabled, onSelect:() => onChange((live) => ({...live, background:color}))}]})} />)}
     </div>
-    <p className="te-help">Click a color to style your selected text or shape. With nothing selected, it colors the page.</p>
-    <button className="te-button te-full" disabled={disabled} onClick={() => onApply(false)}>Apply brand to this page</button>
-    <button className="te-text-button te-full" disabled={disabled} onClick={() => onApply(true)}>Apply to all pages</button>
+    <p className="te-help">Click a color to style your selected text or shape. With nothing selected, it colors {continuous ? "the whole carousel" : "the page"}.</p>
+    <button className="te-button te-full" disabled={disabled} onClick={() => onApply(continuous)}>{continuous ? "Apply brand to carousel" : "Apply brand to this page"}</button>
+    {!continuous && <button className="te-text-button te-full" disabled={disabled} onClick={() => onApply(true)}>Apply to all pages</button>}
     <div className="te-panel-heading te-brand-assets-heading"><h2>Logos & elements</h2><span>{kit.assets.length}/40</span></div>
     <input className="te-brand-search" aria-label="Search brand elements" placeholder="Search brand elements" value={search} onChange={(event) => setSearch(event.target.value)} />
     <div className="te-brand-element-grid">
-      {kit.assets.filter((asset) => asset.name.toLowerCase().includes(search.toLowerCase())).map((asset) => <button key={asset.id} disabled={disabled || scene.elements.length >= 100} aria-label={`Add brand element ${asset.name}`} title={asset.name} onClick={() => onInsert(asset)} onContextMenu={(event) => openMenu(event,{label:asset.name,items:[{id:"insert",label:"Add to this page",disabled:disabled || scene.elements.length >= 100,onSelect:() => onInsert(asset)}]})}>
+      {kit.assets.filter((asset) => asset.name.toLowerCase().includes(search.toLowerCase())).map((asset) => <button key={asset.id} disabled={disabled || scene.elements.length >= 100} aria-label={`Add brand element ${asset.name}`} title={asset.name} onClick={() => onInsert(asset)} onContextMenu={(event) => openMenu(event,{label:asset.name,items:[{id:"insert",label:continuous ? "Add to carousel" : "Add to this page",disabled:disabled || scene.elements.length >= 100,onSelect:() => onInsert(asset)}]})}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={proxied(asset.src)} alt="" /><span>{asset.name}</span>
       </button>)}
