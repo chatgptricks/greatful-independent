@@ -1,0 +1,54 @@
+.te-brand-workspace { padding-bottom: 30px; }
+.te-brand-workspace .te-section-heading { align-items: center; }
+.te-brand-notice { margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; }
+.te-brand-kit-list { display: flex; gap: 12px; overflow-x: auto; padding: 2px 1px 22px; margin-bottom: 15px; }
+.te-brand-kit-card { flex: 0 0 235px; position: relative; border: 1px solid #ffffff0d; border-radius: 10px; background: #1e1e21; }
+.te-brand-kit-card.is-active { border-color: #a395e599; background: #28252f; }
+.te-brand-kit-select { width: 100%; padding: 16px 37px 16px 14px; display: flex; align-items: center; gap: 12px; text-align: left; border: 0; border-radius: inherit; background: transparent; color: #e6e6eb; }
+.te-brand-kit-monogram { width: 38px; height: 42px; flex: 0 0 38px; display: grid; place-items: center; border-radius: 6px; font: 500 22px/1 Georgia,serif; }
+.te-brand-kit-select > span:last-child { min-width: 0; }
+.te-brand-kit-select strong { display: block; font-size: 12px; font-weight: 500; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.te-brand-kit-select small { display: block; color: #8e8d96; font-size: 10px; margin-top: 6px; }
+.te-brand-dots { position: absolute; right: 4px; top: 26px; font-size: 22px; }
+.te-brand-detail { display: grid; grid-template-columns: 286px minmax(0,1fr); gap: 24px; align-items: start; }
+.te-brand-foundation, .te-brand-assets { background: #1a1a1d; border: 1px solid #ffffff0a; border-radius: 12px; padding: 22px; }
+.te-brand-panel-title { display: flex; align-items: start; justify-content: space-between; gap: 15px; margin-bottom: 22px; }
+.te-brand-panel-title h2 { margin: 0; color: #e3e3e8; font-size: 14px; font-weight: 500; }
+.te-brand-panel-title > span { font-size: 9px; color: #73737d; white-space: nowrap; padding-top: 3px; }
+.te-brand-panel-title p { font-size: 11px; line-height: 1.6; color: #82828d; margin: 9px 0 0; }
+.te-brand-foundation .te-field { margin-bottom: 18px; }
+.te-brand-foundation .te-color-field { gap: 6px; font-size: 10px; }
+.te-brand-foundation .te-color-field .te-color-hex { width: 72px; }
+.te-brand-palette-heading { display: flex; justify-content: space-between; align-items: center; margin: 22px 0 12px; }
+.te-brand-palette-heading h3 { font-size: 11px; font-weight: 500; color: #c1c1c9; margin: 0; }
+.te-brand-palette-heading span { font-size: 9px; color: #73737d; }
+.te-brand-palette { display: flex; flex-direction: column; gap: 7px; }
+.te-brand-color { display: flex; align-items: center; gap: 10px; }
+.te-brand-color input { width: 26px; height: 26px; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.te-brand-color input::-webkit-color-swatch-wrapper { padding: 0; }
+.te-brand-color input::-webkit-color-swatch { border: 1px solid #ffffff22; border-radius: 5px; }
+.te-brand-color code { flex: 1; font-size: 10px; color: #92929d; }
+.te-brand-color .te-icon { height: 26px; width: 26px; }
+.te-brand-add-color { display: flex; align-items: center; gap: 10px; margin-top: 12px; border-top: 1px solid #ffffff09; }
+.te-brand-add-color .te-color-field { flex: 1; }
+.te-brand-mini-preview { display: flex; flex-direction: column; justify-content: space-between; aspect-ratio: 1.15; padding: 22px; margin-top: 22px; border-radius: 8px; overflow: hidden; }
+.te-brand-mini-preview small { font: 9px/1.6 var(--font-sans),sans-serif; letter-spacing: 1px; opacity: .65; }
+.te-brand-mini-preview strong { font-size: 30px; line-height: 1.12; font-weight: 500; overflow-wrap: anywhere; }
+.te-brand-mini-preview > span { font: 10px/1.6 var(--font-sans),sans-serif; opacity: .7; }
+.te-brand-upload-actions { display: flex; gap: 9px; flex-wrap: wrap; }
+.te-brand-upload-help { color: #72727d; font-size: 10px; line-height: 1.7; margin: 13px 0 25px; }
+.te-brand-asset-filters { display: flex; gap: 7px; margin-bottom: 20px; }
+.te-brand-asset-filters button { border: 0; background: transparent; padding: 7px 12px; border-radius: 6px; color: #8c8c96; font-size: 11px; }
+.te-brand-asset-filters button.is-active { background: #ffffff0b; color: #ededf0; }
+.te-brand-asset-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(140px,1fr)); gap: 19px 14px; }
+.te-brand-asset-card { min-width: 0; }
+.te-brand-asset-art { position: relative; aspect-ratio: 1.2; padding: 18px; border-radius: 8px; overflow: hidden; background-color: #28282d; background-image: linear-gradient(45deg,#ffffff07 25%,transparent 25%),linear-gradient(-45deg,#ffffff07 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ffffff07 75%),linear-gradient(-45deg,transparent 75%,#ffffff07 75%); background-size: 16px 16px; background-position: 0 0,0 8px,8px -8px,-8px 0; }
+.te-brand-asset-art img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.te-brand-asset-card > strong { display: block; margin-top: 10px; font-size: 11px; font-weight: 500; color: #c9c9d1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.te-brand-asset-card > span { display: block; margin-top: 4px; font-size: 9px; color: #787883; }
+.te-brand-assets-empty { text-align: center; padding: 46px 25px 30px; color: #72727f; }
+.te-brand-assets-empty svg { margin: 0 auto 17px; }
+.te-brand-assets-empty h3 { font-size: 14px; font-weight: 500; color: #b0b0bb; }
+.te-brand-assets-empty p { max-width: 340px; margin: 12px auto 0; font-size: 11px; line-height: 1.9; }
+@media(max-width:1000px) { .te-brand-detail { grid-template-columns: 250px minmax(0,1fr); gap: 16px; } .te-brand-foundation,.te-brand-assets { padding: 17px; } }
+@media(max-width:760px) { .te-brand-detail { grid-template-columns: 1fr; } .te-brand-kit-card { flex-basis: 215px; } .te-brand-mini-preview { display: none; } .te-brand-workspace .te-section-heading { gap: 20px; align-items: start; } }

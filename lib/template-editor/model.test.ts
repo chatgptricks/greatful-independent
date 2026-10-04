@@ -17,6 +17,11 @@ import {
   resizeCanvasScene,
   sceneForPage,
   storyForDesign,
+  activeBrandKit,
+  createBrandKit,
+  libraryBrandKits,
+  withBrandKits,
+  type SavedBrandKit,
   type EditorLibrary,
   type CanvasElement,
   type CanvasScene,
@@ -24,12 +29,128 @@ import {
 
 function library(): EditorLibrary {
   return {
-    version: 1,
+    ...structuredClone(EMPTY_LIBRARY),
     designs: [createDesign(BUILT_IN_TEMPLATES[0])],
     templates: [],
     brand: { ...DEFAULT_BRAND },
   };
 }
+
+function brandLibrary(): EditorLibrary {
+  const first = createBrandKit("Studio one");
+  first.assets = [{ id: "logo-one", name: "Primary logo", src: "/template-editor/forest.svg", width: 800, height: 400, kind: "logo" }];
+  const second = createBrandKit("Studio two", { ...DEFAULT_BRAND, font: "space", background: "#ffffff", text: "#123456" });
+  second.palette = ["#ffffff", "#123456", "#ff0000"];
+  return withBrandKits(library(), [first, second], second.id);
+}
+
+test("legacy brand-only libraries migrate once without losing designs or brand settings", () => {
+  const legacy: Record<string, unknown> = { ...library(), brand: { name: "Legacy studio", font: "space", background: "#ffffff", text: "#123456" } };
+  delete legacy.brandKits;
+  delete legacy.activeBrandKitId;
+  const migrated = parseLibrary(legacy)!;
+  assert.ok(migrated);
+  assert.equal(migrated.activeBrandKitId, "brand-default");
+  assert.deepEqual(migrated.brand, legacy.brand);
+  assert.deepEqual(migrated.brandKits, [{ ...migrated.brand, id: "brand-default", palette: ["#ffffff", "#123456"], assets: [] }]);
+  assert.deepEqual(migrated.designs, legacy.designs);
+  assert.deepEqual(parseLibrary(JSON.stringify(migrated)), migrated);
+  assert.equal(parseLibrary(legacy)!.activeBrandKitId, migrated.activeBrandKitId);
+});
+
+test("multiple brand kits and image assets round-trip with the active projection canonicalized", () => {
+  const input = brandLibrary();
+  assert.deepEqual(parseLibrary(JSON.stringify(input)), input);
+  const active = activeBrandKit(input);
+  assert.equal(active.name, "Studio two");
+  input.brand = { ...DEFAULT_BRAND, name: "Stale compatibility projection" };
+  const parsed = parseLibrary(input)!;
+  assert.deepEqual(parsed.brand, { name: active.name, font: active.font, background: active.background, text: active.text });
+  assert.equal(parsed.brandKits[0].assets[0].kind, "logo");
+  parsed.brandKits[0].assets[0].name = "Edited copy";
+  assert.equal(input.brandKits[0].assets[0].name, "Primary logo");
+});
+
+test("brand helpers do not mutate their inputs and keep active-kit changes synchronized", () => {
+  const input = brandLibrary();
+  const original = structuredClone(input);
+  const kits = libraryBrandKits(input);
+  kits[0].name = "Changed studio";
+  kits[0].assets[0].name = "Changed logo";
+  const changed = withBrandKits(input, kits, kits[0].id);
+  assert.equal(changed.brand.name, "Changed studio");
+  assert.equal(changed.activeBrandKitId, kits[0].id);
+  assert.equal(activeBrandKit(changed).assets[0].name, "Changed logo");
+  assert.deepEqual(input, original);
+  kits[0].palette.push("#777777");
+  assert.ok(!changed.brandKits[0].palette.includes("#777777"));
+  const removedActive = withBrandKits(changed, [changed.brandKits[1]]);
+  assert.equal(removedActive.activeBrandKitId, changed.brandKits[1].id);
+  assert.equal(removedActive.brand.name, "Studio two");
+  assert.throws(() => withBrandKits(input, []), /valid brand kits/);
+  assert.notEqual(createBrandKit().id, createBrandKit().id);
+});
+
+test("brand imports reject duplicate IDs, dangling selections, and invalid bounds", () => {
+  const invalidKits: unknown[] = [null, {}, [], Array.from({ length: 21 }, () => createBrandKit())];
+  for (const brandKits of invalidKits) assert.equal(parseLibrary({ ...brandLibrary(), brandKits }), null);
+  const repeated = createBrandKit();
+  assert.equal(parseLibrary({ ...brandLibrary(), brandKits: [repeated, repeated], activeBrandKitId: repeated.id }), null);
+  for (const activeBrandKitId of [null, 1, "missing", "../invalid"]) assert.equal(parseLibrary({ ...brandLibrary(), activeBrandKitId }), null);
+  const invalidFields: Partial<Record<keyof SavedBrandKit, unknown[]>> = {
+    id: ["", "bad id", "../outside"],
+    name: [null, "x".repeat(201)],
+    font: ["unknown-font", "url(https://example.com)"],
+    background: ["red;background:url(https://example.com)"],
+    text: ["var(--external-color)"],
+    palette: [null, ["url(https://example.com)"], Array(21).fill("#ffffff")],
+    assets: [null, Array.from({ length: 41 }, (_, index) => ({ id: `asset-${index}`, name: "Asset", src: "/a.png", width: 1, height: 1, kind: "image" }))],
+  };
+  for (const [field, values] of Object.entries(invalidFields)) for (const value of values!) {
+    const input = brandLibrary();
+    Object.assign(input.brandKits[0], { [field]: value });
+    assert.equal(parseLibrary(input), null, `${field}=${String(value)}`);
+  }
+  const allowed = library();
+  allowed.brandKits = Array.from({ length: 20 }, () => createBrandKit());
+  allowed.activeBrandKitId = allowed.brandKits[0].id;
+  allowed.brandKits[0].palette = Array(20).fill("#ffffff");
+  allowed.brandKits[0].assets = Array.from({ length: 40 }, (_, index) => ({ id: `asset-${index}`, name: "Asset", src: "/a.png", width: 1, height: 1, kind: "image" }));
+  assert.ok(parseLibrary(allowed));
+});
+
+test("brand assets obey existing image safety rules and strict asset metadata", () => {
+  const invalidFields: Record<string, unknown[]> = {
+    id: ["", "../bad"], name: [null, "x".repeat(201)],
+    src: ["javascript:alert(1)", "blob:https://example.com/abc", "file:///tmp/a.png", "//example.com/a.png", "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=", "data:image/png;base64,SGVsbG8=", `https://example.com/${"x".repeat(2_000_000)}`],
+    width: [0, -1, Infinity, 100001, "100"], height: [0, NaN, 100001], kind: ["video", "svg", null],
+  };
+  for (const [field, values] of Object.entries(invalidFields)) for (const value of values) {
+    const input = brandLibrary();
+    Object.assign(input.brandKits[0].assets[0], { [field]: value });
+    assert.equal(parseLibrary(input), null, `${field}=${String(value).slice(0, 100)}`);
+  }
+  const duplicateAsset = brandLibrary();
+  duplicateAsset.brandKits[0].assets.push({ ...duplicateAsset.brandKits[0].assets[0] });
+  assert.equal(parseLibrary(duplicateAsset), null);
+  const raster = brandLibrary();
+  raster.brandKits[0].assets[0].src = `data:image/png;base64,${Buffer.from("\x89PNG\r\n\x1a\n", "binary").toString("base64")}`;
+  assert.ok(parseLibrary(raster));
+  const untrusted = brandLibrary();
+  Object.assign(untrusted.brandKits[0].assets[0], { onload: "alert(1)", style: "position:fixed" });
+  Object.assign(untrusted.brandKits[0], { secret: "discard this" });
+  const safe = parseLibrary(untrusted)!;
+  assert.ok(!("onload" in safe.brandKits[0].assets[0]));
+  assert.ok(!("secret" in safe.brandKits[0]));
+});
+
+test("brand asset payloads still count toward the shared whole-library limit", () => {
+  const input = brandLibrary();
+  const payload = `data:image/png;base64,${Buffer.from("\x89PNG\r\n\x1a\n" + "0".repeat(1_499_900), "binary").toString("base64")}`;
+  assert.ok(payload.length < 2_000_000);
+  input.brandKits[0].assets = Array.from({ length: 16 }, (_, index) => ({ id: `asset-${index}`, name: "Large asset", src: payload, width: 100, height: 100, kind: "image" }));
+  assert.equal(parseLibrary(input), null);
+});
 
 test("every built-in template can become a valid, independent persisted design", () => {
   const designs = BUILT_IN_TEMPLATES.map(createDesign);

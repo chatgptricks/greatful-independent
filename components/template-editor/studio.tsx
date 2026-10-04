@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import {
   SearchIcon,
   PlusIcon,
@@ -20,6 +20,9 @@ import {
   sceneForPage,
   editTemplateDesign,
   cloneDesign,
+  designAsTemplate,
+  libraryBrandKits,
+  withBrandKits,
   parseLibrary,
   type DesignDocument,
   type DesignTemplate,
@@ -30,8 +33,23 @@ import { saveBlob } from "@/lib/template-editor/export";
 import { GF_FONT_VARS } from "@/app/admin/(tool)/grateful-future/fonts";
 import { DesignPreview } from "./preview";
 import { DesignEditor } from "./design-editor";
-import { ColorField, FontSelect, Modal } from "./controls";
+import { Modal } from "./controls";
+import { BrandWorkspace } from "./brand-workspace";
+import { ContextMenuProvider, useContextMenu, type ContextMenuDefinition } from "./context-menu";
 import "./studio.css";
+
+function LibraryCard({ menu, children }: { menu: ContextMenuDefinition; children: ReactNode }) {
+  const { openMenu } = useContextMenu();
+  return <article className="te-template-card" onContextMenu={(event) => openMenu(event, menu)}>
+    {children}
+    <button type="button" className="te-card-menu" aria-label={`Actions for ${menu.label}`} title={`Actions for ${menu.label}`} aria-haspopup="menu" onClick={(event) => openMenu(event, menu)}>⋯</button>
+  </article>;
+}
+
+function WorkspaceMenu({ menu }: { menu: ContextMenuDefinition }) {
+  const { openMenu } = useContextMenu();
+  return <button type="button" className="te-icon te-workspace-menu" aria-label="Workspace actions" title="Workspace actions" aria-haspopup="menu" onClick={(event) => openMenu(event, menu)}>⋯</button>;
+}
 
 export function templatePreview(template: DesignTemplate): DesignDocument {
   return {
@@ -70,11 +88,14 @@ export default function TemplateStudio() {
     name: string;
   } | null>(null);
   const [conflictOpen, setConflictOpen] = useState(false);
+  const [rename, setRename] = useState<{ kind: "design" | "template"; id: string; value: string } | null>(null);
   const [newTemplate, setNewTemplate] = useState<{
     name: string;
     format: DesignFormat;
   } | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const permission = useRef(canEdit);
+  useEffect(() => { permission.current = canEdit; }, [canEdit]);
   const templates = [...BUILT_IN_TEMPLATES, ...library.templates];
   const active = library.designs.find((d) => d.id === activeId);
   const statusText = {
@@ -86,27 +107,28 @@ export default function TemplateStudio() {
     conflict: "Newer version available",
   }[status];
 
+  function addDocument(document: DesignDocument) {
+    return setLibrary((current) => {
+      if (current.designs.length >= 150) throw new Error("Your workspace has reached its 150-design limit.");
+      return { ...current, designs: [document, ...current.designs] };
+    });
+  }
+
   function openTemplate(template: DesignTemplate) {
-    if (!canEdit) return;
+    if (!permission.current || library.designs.length >= 150) return;
     const document = createDesign(template);
     document.pages = document.pages.map((p) => ({
       ...p,
       canvas: sceneForPage(p, document.format),
     }));
-    setLibrary((current) => ({
-      ...current,
-      designs: [document, ...current.designs],
-    }));
-    setActiveId(document.id);
+    const accepted = addDocument(document);
+    if (accepted !== false) setActiveId(document.id);
   }
   function openBlankDesign() {
-    if (!canEdit || library.designs.length >= 150) return;
+    if (!permission.current || library.designs.length >= 150) return;
     const document = createBlankDesign("Untitled design", "portrait");
-    setLibrary((current) => ({
-      ...current,
-      designs: [document, ...current.designs],
-    }));
-    setActiveId(document.id);
+    const accepted = addDocument(document);
+    if (accepted !== false) setActiveId(document.id);
   }
   function openTemplateEditor(template: DesignTemplate) {
     const draft = library.designs.find(
@@ -116,27 +138,26 @@ export default function TemplateStudio() {
       setActiveId(draft.id);
       return;
     }
-    if (!canEdit || library.designs.length >= 150) return;
+    if (!permission.current || library.designs.length >= 150) return;
     const document = editTemplateDesign(template);
-    setLibrary((current) => ({
-      ...current,
-      designs: [document, ...current.designs],
-    }));
-    setActiveId(document.id);
+    const accepted = addDocument(document);
+    if (accepted !== false) setActiveId(document.id);
   }
   async function importLibrary(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file) return;
+    if (!file || !permission.current) return;
     try {
       if (file.size > 30 * 1024 * 1024)
         throw new Error("Choose a backup smaller than 30 MB.");
       const imported = parseLibrary(JSON.parse(await file.text()));
+      if (!permission.current) return;
       if (!imported)
         throw new Error("This file is not a valid Greatful workspace backup.");
       if (
         library.designs.length + imported.designs.length > 150 ||
-        library.templates.length + imported.templates.length > 80
+        library.templates.length + imported.templates.length > 80 ||
+        libraryBrandKits(library).length + libraryBrandKits(imported).length > 20
       )
         throw new Error(
           "This backup would exceed the workspace limit. Export and remove older designs first.",
@@ -165,15 +186,17 @@ export default function TemplateStudio() {
             }
           : {}),
       }));
-      setLibrary((current) => ({
-        ...current,
-        designs: [...restoredDesigns, ...current.designs],
-        templates: [...current.templates, ...restoredTemplates],
-        brand: { ...imported.brand },
-      }));
+      const kitIds = new Map(libraryBrandKits(imported).map((kit) => [kit.id, crypto.randomUUID()]));
+      const restoredKits = libraryBrandKits(imported).map((kit) => ({ ...kit, id: kitIds.get(kit.id)!, palette: [...kit.palette], assets: kit.assets.map((asset) => ({ ...asset, id: crypto.randomUUID() })) }));
+      const accepted = setLibrary((current) => {
+        if (!permission.current) throw new Error("This workspace is not currently editable.");
+        if (current.designs.length + restoredDesigns.length > 150 || current.templates.length + restoredTemplates.length > 80 || libraryBrandKits(current).length + restoredKits.length > 20) throw new Error("This backup would exceed the workspace limit. Remove older items and try again.");
+        return withBrandKits({ ...current, designs: [...restoredDesigns, ...current.designs], templates: [...current.templates, ...restoredTemplates] }, [...libraryBrandKits(current), ...restoredKits], kitIds.get(imported.activeBrandKitId) ?? restoredKits[0].id);
+      });
+      if (accepted === false) return;
       setView("designs");
       setMessage(
-        `Imported ${imported.designs.length} designs and ${imported.templates.length} templates.`,
+        `Imported ${imported.designs.length} designs, ${imported.templates.length} templates, and ${restoredKits.length} brand kits.`,
       );
     } catch (reason) {
       setMessage(
@@ -192,8 +215,52 @@ export default function TemplateStudio() {
     );
   }
 
+  function duplicateDesign(design: DesignDocument) {
+    if (!permission.current) return;
+    addDocument(cloneDesign(design));
+  }
+  function designMenu(design: DesignDocument): ContextMenuDefinition {
+    return { label: design.name, items: [
+      { id: "open", label: design.purpose === "template" ? "Continue editing template" : "Open design", onSelect: () => setActiveId(design.id) },
+      { id: "rename", label: "Rename", disabled: !canEdit, onSelect: () => { if (permission.current) setRename({ kind: "design", id: design.id, value: design.name }); } },
+      { id: "duplicate", label: "Duplicate design", disabled: !canEdit || library.designs.length >= 150, onSelect: () => duplicateDesign(design) },
+      { id: "delete", label: design.purpose === "template" ? "Delete draft…" : "Delete design…", disabled: !canEdit, danger: true, separator: true, onSelect: () => { if (permission.current) setConfirm({ kind: "design", id: design.id, name: design.name }); } },
+    ] };
+  }
+  function templateMenu(template: DesignTemplate): ContextMenuDefinition {
+    return { label: template.name, items: [
+      { id: "use", label: "Use template", disabled: !canEdit || library.designs.length >= 150, onSelect: () => openTemplate(template) },
+      ...(template.custom ? [
+        { id: "edit", label: "Edit template", disabled: !canEdit || library.designs.length >= 150, onSelect: () => openTemplateEditor(template) },
+        { id: "rename", label: "Rename template", disabled: !canEdit, onSelect: () => { if (permission.current) setRename({ kind: "template" as const, id: template.id, value: template.name }); } },
+      ] : []),
+      { id: "duplicate", label: "Duplicate template", disabled: !canEdit || library.templates.length >= 80, onSelect: () => {
+        if (!permission.current) return;
+        const copy = designAsTemplate(templatePreview(template), `${template.name.slice(0, 95)} copy`);
+        const accepted = setLibrary((current) => {
+          if (current.templates.length >= 80) throw new Error("Your workspace has reached its 80-template limit.");
+          return { ...current, templates: [copy, ...current.templates] };
+        });
+        if (accepted === false) return;
+        setCategory("My templates"); setMessage("Template copied to My templates.");
+      } },
+      ...(template.custom ? [{ id: "delete", label: "Delete template…", disabled: !canEdit, danger: true, separator: true, onSelect: () => { if (permission.current) setConfirm({ kind: "template" as const, id: template.id, name: template.name }); } }] : []),
+    ] };
+  }
+  const workspaceMenu: ContextMenuDefinition = { label: "Workspace", items: [
+    { id: "new-design", label: "New design", disabled: !canEdit || library.designs.length >= 150, onSelect: openBlankDesign },
+    { id: "new-template", label: "Create template", disabled: !canEdit || library.designs.length >= 150 || library.templates.length >= 80, onSelect: () => { if (permission.current) setNewTemplate({ name: "Untitled template", format: "portrait" }); } },
+    { id: "templates", label: "Browse templates", separator: true, onSelect: () => { setView("templates"); setQuery(""); } },
+    { id: "designs", label: "Your designs", onSelect: () => { setView("designs"); setQuery(""); } },
+    { id: "brand", label: "Brand kits", onSelect: () => setView("brand") },
+    { id: "backup", label: "Download workspace backup", separator: true, onSelect: backup },
+    { id: "import", label: "Import workspace backup…", disabled: !canEdit, onSelect: () => { if (permission.current) importRef.current?.click(); } },
+  ] };
+
   return (
+    <ContextMenuProvider defaultMenu={workspaceMenu}>
     <div className={`gf-root te-root ${GF_FONT_VARS}`}>
+      <input type="file" ref={importRef} hidden accept="application/json,.json" onChange={importLibrary} />
       {(error || status === "conflict") && (
         <div className="te-save-error" role="alert">
           <span>
@@ -219,6 +286,27 @@ export default function TemplateStudio() {
           design={active}
           templates={templates}
           brand={library.brand}
+          brandKits={libraryBrandKits(library)}
+          activeBrandKitId={library.activeBrandKitId}
+          onSelectBrandKit={(id) => {
+            if (!permission.current) return;
+            setLibrary((current) => withBrandKits(current, libraryBrandKits(current), id));
+          }}
+          onSaveBrandAsset={(asset, kitId) => {
+            if (!permission.current) return false;
+            const kits = libraryBrandKits(library);
+            const target = kits.find((kit) => kit.id === kitId);
+            if (!target) throw new Error("This brand kit was removed. Choose another kit.");
+            if (target.assets.length >= 40) throw new Error("This brand kit has reached its 40-asset limit.");
+            return setLibrary((current) => {
+              const currentKits = libraryBrandKits(current);
+              const destination = currentKits.find((kit) => kit.id === kitId);
+              if (!destination) throw new Error("This brand kit was removed. Choose another kit.");
+              if (destination.assets.length >= 40) throw new Error("This brand kit has reached its 40-asset limit.");
+              return withBrandKits(current, currentKits.map((kit) => kit.id === kitId ? { ...kit, assets: [...kit.assets, { ...asset, id: crypto.randomUUID() }] } : kit), current.activeBrandKitId);
+            });
+          }}
+          onManageBrand={() => { setActiveId(null); setView("brand"); }}
           saveStatus={statusText}
           canEdit={canEdit}
           onExit={() => {
@@ -244,7 +332,7 @@ export default function TemplateStudio() {
               !library.templates.some((t) => t.id === existingId)
             )
               throw new Error("Your library has reached 80 custom templates.");
-            setLibrary((current) => ({
+            const accepted = setLibrary((current) => ({
               ...current,
               templates: [
                 { ...template, id: existingId ?? template.id },
@@ -255,6 +343,7 @@ export default function TemplateStudio() {
                   ? current.designs.filter((d) => d.id !== active.id)
                   : current.designs,
             }));
+            if (accepted === false) throw new Error("This template could not be saved. Check the workspace save message.");
             if (active.purpose === "template") {
               setActiveId(null);
               setView("templates");
@@ -280,6 +369,7 @@ export default function TemplateStudio() {
               </span>
             </a>
             <div className="te-header-right">
+              <WorkspaceMenu menu={workspaceMenu} />
               <span className="te-save-status" role="status">
                 <span className="te-status-dot" />
                 {statusText}
@@ -319,7 +409,7 @@ export default function TemplateStudio() {
                   [
                     ["templates", "Templates", LayoutIcon],
                     ["designs", "Your designs", CopyIcon],
-                    ["brand", "Brand kit", StarIcon],
+                    ["brand", "Brand kits", StarIcon],
                   ] as const
                 ).map(([id, label, Icon]) => (
                   <button
@@ -442,7 +532,7 @@ export default function TemplateStudio() {
                       library.designs
                         .filter((d) => d.purpose === "template")
                         .map((draft) => (
-                          <article className="te-template-card" key={draft.id}>
+                          <LibraryCard menu={designMenu(draft)} key={draft.id}>
                             <button
                               className="te-template-open"
                               onClick={() => setActiveId(draft.id)}
@@ -466,7 +556,7 @@ export default function TemplateStudio() {
                                 when it’s ready.
                               </span>
                             </button>
-                          </article>
+                          </LibraryCard>
                         ))}
                     {category === "My templates" && (
                       <button
@@ -500,7 +590,7 @@ export default function TemplateStudio() {
                             .includes(query.toLowerCase()),
                       )
                       .map((template) => (
-                        <article className="te-template-card" key={template.id}>
+                        <LibraryCard menu={templateMenu(template)} key={template.id}>
                           <button
                             className="te-template-open"
                             disabled={!canEdit || library.designs.length >= 150}
@@ -546,6 +636,7 @@ export default function TemplateStudio() {
                                 className="te-icon"
                                 title="Delete template"
                                 aria-label={`Delete ${template.name} template`}
+                                disabled={!canEdit}
                                 onClick={() =>
                                   setConfirm({
                                     kind: "template",
@@ -558,7 +649,7 @@ export default function TemplateStudio() {
                               </button>
                             </div>
                           )}
-                        </article>
+                        </LibraryCard>
                       ))}
                   </div>
                   {!(
@@ -613,13 +704,6 @@ export default function TemplateStudio() {
                       >
                         Import backup
                       </button>
-                      <input
-                        type="file"
-                        ref={importRef}
-                        hidden
-                        accept="application/json,.json"
-                        onChange={importLibrary}
-                      />
                     </div>
                   </div>
                   <label className="te-search te-design-search">
@@ -638,7 +722,7 @@ export default function TemplateStudio() {
                       )
                       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
                       .map((design) => (
-                        <article className="te-template-card" key={design.id}>
+                        <LibraryCard menu={designMenu(design)} key={design.id}>
                           <button
                             className="te-template-open"
                             onClick={() => setActiveId(design.id)}
@@ -677,13 +761,7 @@ export default function TemplateStudio() {
                               disabled={
                                 !canEdit || library.designs.length >= 150
                               }
-                              onClick={() => {
-                                const copy = cloneDesign(design);
-                                setLibrary((current) => ({
-                                  ...current,
-                                  designs: [copy, ...current.designs],
-                                }));
-                              }}
+                              onClick={() => duplicateDesign(design)}
                             >
                               <CopyIcon />
                             </button>
@@ -703,7 +781,7 @@ export default function TemplateStudio() {
                               <TrashIcon />
                             </button>
                           </div>
-                        </article>
+                        </LibraryCard>
                       ))}
                   </div>
                   {!library.designs.length && (
@@ -731,87 +809,7 @@ export default function TemplateStudio() {
                     )}
                 </>
               )}
-              {view === "brand" && (
-                <>
-                  <div className="te-section-heading">
-                    <div>
-                      <span className="te-eyebrow">
-                        MAKE IT RECOGNIZABLY YOURS
-                      </span>
-                      <h1>Your brand, on repeat.</h1>
-                      <p>
-                        Keep your go-to colors and type ready for every design.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="te-brand-layout">
-                    <fieldset className="te-brand-form" disabled={!canEdit}>
-                      <label className="te-field">
-                        Brand name
-                        <input
-                          value={library.brand.name}
-                          maxLength={100}
-                          onChange={(e) =>
-                            setLibrary((current) => ({
-                              ...current,
-                              brand: { ...current.brand, name: e.target.value },
-                            }))
-                          }
-                        />
-                      </label>
-                      <FontSelect
-                        value={library.brand.font}
-                        onChange={(font) =>
-                          setLibrary((current) => ({
-                            ...current,
-                            brand: { ...current.brand, font },
-                          }))
-                        }
-                      />
-                      <ColorField
-                        label="Background color"
-                        value={library.brand.background}
-                        onChange={(background) =>
-                          setLibrary((current) => ({
-                            ...current,
-                            brand: { ...current.brand, background },
-                          }))
-                        }
-                      />
-                      <ColorField
-                        label="Text color"
-                        value={library.brand.text}
-                        onChange={(text) =>
-                          setLibrary((current) => ({
-                            ...current,
-                            brand: { ...current.brand, text },
-                          }))
-                        }
-                      />
-                      <p className="te-help">
-                        Use “Apply brand” in the editor to apply these settings
-                        to every page. Template layouts and your content stay in
-                        place.
-                      </p>
-                    </fieldset>
-                    <div
-                      className={`te-brand-sample gf-font-${library.brand.font}`}
-                      style={{
-                        background: library.brand.background,
-                        color: library.brand.text,
-                      }}
-                    >
-                      <span>YOUR BRAND, DEFINED.</span>
-                      <strong>{library.brand.name || "Your brand"}</strong>
-                      <p>
-                        Good things deserve
-                        <br />a signature style.
-                      </p>
-                      <span>MADE WITH GREATFUL ↗</span>
-                    </div>
-                  </div>
-                </>
-              )}
+              {view === "brand" && <BrandWorkspace library={library} canEdit={canEdit} onChange={setLibrary} />}
             </main>
           </div>
         </>
@@ -831,10 +829,8 @@ export default function TemplateStudio() {
                 newTemplate.name.trim() || "Untitled template",
                 newTemplate.format,
               );
-              setLibrary((current) => ({
-                ...current,
-                designs: [document, ...current.designs],
-              }));
+              const accepted = addDocument(document);
+              if (accepted === false) return;
               setActiveId(document.id);
               setNewTemplate(null);
             }}
@@ -901,6 +897,18 @@ export default function TemplateStudio() {
           </form>
         </Modal>
       )}
+      {rename && <Modal title={rename.kind === "template" ? "Rename template" : "Rename design"} onClose={() => setRename(null)}>
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          if (!permission.current || !rename.value.trim()) return;
+          const accepted = setLibrary((current) => rename.kind === "design" ? { ...current, designs: current.designs.map((design) => design.id === rename.id ? { ...design, name: rename.value.trim(), updatedAt: new Date().toISOString() } : design) } : { ...current, templates: current.templates.map((template) => template.id === rename.id ? { ...template, name: rename.value.trim() } : template) });
+          if (accepted === false) return;
+          setRename(null);
+        }}>
+          <label className="te-field">Name<input autoFocus required maxLength={100} value={rename.value} onChange={(event) => setRename({ ...rename, value: event.target.value })} /></label>
+          <div className="te-modal-actions"><button type="button" className="te-button" onClick={() => setRename(null)}>Cancel</button><button className="te-button te-primary" disabled={!canEdit || !rename.value.trim()}>Save name</button></div>
+        </form>
+      </Modal>}
       {confirm && (
         <Modal
           title={`Delete ${confirm.kind}?`}
@@ -913,8 +921,10 @@ export default function TemplateStudio() {
             </button>
             <button
               className="te-button te-primary"
+              disabled={!canEdit}
               onClick={() => {
-                setLibrary((current) =>
+                if (!permission.current) return;
+                const accepted = setLibrary((current) =>
                   confirm.kind === "design"
                     ? {
                         ...current,
@@ -929,6 +939,7 @@ export default function TemplateStudio() {
                         ),
                       },
                 );
+                if (accepted === false) return;
                 setConfirm(null);
               }}
             >
@@ -964,5 +975,6 @@ export default function TemplateStudio() {
         </Modal>
       )}
     </div>
+    </ContextMenuProvider>
   );
 }

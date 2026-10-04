@@ -41,10 +41,10 @@ function loadModule(relative, dependencies = {}, environment = process) {
 }
 
 const model = loadModule("lib/template-editor/model.ts");
-const newLibrary = (name) => ({
-  ...structuredClone(model.EMPTY_LIBRARY),
-  brand: { ...model.DEFAULT_BRAND, name },
-});
+const newLibrary = (name) => {
+  const library = structuredClone(model.EMPTY_LIBRARY);
+  return model.withBrandKits(library, [{ ...model.activeBrandKit(library), name }]);
+};
 
 function persistence(t, options = {}) {
   const directory = fs.mkdtempSync(
