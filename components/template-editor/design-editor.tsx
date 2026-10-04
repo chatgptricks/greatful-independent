@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ChangeEvent,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -21,25 +15,34 @@ import {
   TrashIcon,
 } from "@/components/grateful-future/icons";
 import {
-  TEMPLATES,
-  SlideThumb,
-  type SlideElement,
-} from "@/components/grateful-future/slide-templates";
-import {
   FORMATS,
   designAsTemplate,
   duplicatePage,
+  createCanvasElement,
+  sceneForPage,
+  resizeCanvasScene,
+  type CanvasElement,
+  type CanvasScene,
   type BrandKit,
   type DesignDocument,
   type DesignFormat,
   type DesignTemplate,
 } from "@/lib/template-editor/model";
-import type { SlideStyle } from "@/lib/grateful-future/types";
 import { exportFrames, fileName, saveBlob } from "@/lib/template-editor/export";
-import { ColorField, FontSelect, Modal, Range } from "./controls";
+import { ColorField, Modal } from "./controls";
+import { CanvasEditor } from "./canvas";
+import { ElementInspector } from "./element-inspector";
+import "./wysiwyg.css";
 import { DesignFrame, DesignPreview, FRAME_WIDTH } from "./preview";
 
-type Tab = "templates" | "content" | "media" | "style";
+type Tab =
+  | "templates"
+  | "text"
+  | "elements"
+  | "media"
+  | "layers"
+  | "caption"
+  | "style";
 type Props = {
   design: DesignDocument;
   templates: DesignTemplate[];
@@ -61,8 +64,8 @@ export function DesignEditor({
   onExit,
   onSaveTemplate,
 }: Props) {
-  const [design, setDesign] = useState(initial);
-  const current = useRef(initial);
+  const [design, setDesign] = useState<DesignDocument>(initial);
+  const current = useRef<DesignDocument>(design);
   const history = useRef<{
     past: DesignDocument[];
     future: DesignDocument[];
@@ -74,8 +77,14 @@ export function DesignEditor({
     redo: false,
   });
   const [pageId, setPageId] = useState(initial.pages[0].id);
-  const [tab, setTab] = useState<Tab>("content");
-  const [selected, setSelected] = useState<SlideElement | null>(null);
+  const activePage = useRef(pageId);
+  useEffect(() => {
+    activePage.current = pageId;
+  }, [pageId]);
+  const [tab, setTab] = useState<Tab>("text");
+  const [selected, setSelected] = useState<string[]>([]);
+  const copied = useRef<CanvasElement[]>([]);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [notice, setNotice] = useState("");
   const [templateName, setTemplateName] = useState<string | null>(null);
   const [exportMenu, setExportMenu] = useState(false);
@@ -85,6 +94,13 @@ export function DesignEditor({
   } | null>(null);
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [fit, setFit] = useState(1);
@@ -99,6 +115,9 @@ export function DesignEditor({
   const page = design.pages.find((p) => p.id === pageId) ?? design.pages[0];
   const index = design.pages.indexOf(page);
   const format = FORMATS[design.format];
+  const canvasHeight = (FRAME_WIDTH * format.height) / format.width;
+  const scene = page.canvas ?? sceneForPage(page, design.format);
+  const scale = Math.max(0.15, fit) * zoom;
   const isTemplateDraft = design.purpose === "template";
   const saveTemplateLabel = isTemplateDraft
     ? design.editingTemplateId
@@ -143,38 +162,161 @@ export function DesignEditor({
     },
     [canEdit, job],
   );
-  function patchStyle(patch: Partial<SlideStyle>, group = "") {
-    commit(
-      (d) => ({
-        ...d,
-        pages: d.pages.map((p) =>
-          p.id === page.id ? { ...p, style: { ...p.style, ...patch } } : p,
-        ),
-      }),
-      group ? `${page.id}:${group}` : "",
-    );
+  const changeScene = useCallback(
+    (next: CanvasScene, group = "") => {
+      commit(
+        (d) => ({
+          ...d,
+          pages: d.pages.map((p) =>
+            p.id === page.id ? { ...p, canvas: next } : p,
+          ),
+        }),
+        group ? `${page.id}:${group}` : "",
+      );
+    },
+    [commit, page.id],
+  );
+  function addElement(element: CanvasElement) {
+    if (scene.elements.length >= 100) {
+      setNotice("Each page supports up to 100 elements.");
+      return;
+    }
+    changeScene({ ...scene, elements: [...scene.elements, element] });
+    setSelected([element.id]);
   }
+  const addText = (size = 28, text = "Add your text") =>
+    addElement(
+      createCanvasElement("text", {
+        text,
+        name: text,
+        x: 32,
+        y: canvasHeight / 2 - 40,
+        width: 296,
+        height: Math.max(60, size * 2.6),
+        font: brand.font,
+        fontSize: size,
+        fontWeight: size >= 24 ? 700 : 400,
+        color: brand.text,
+      }),
+    );
+  const addShape = (shape: "rectangle" | "ellipse", line = false) =>
+    addElement(
+      createCanvasElement("shape", {
+        shape,
+        name: line ? "Line" : shape === "ellipse" ? "Circle" : "Rectangle",
+        x: 100,
+        y: canvasHeight / 2 - (line ? 1 : 70),
+        width: 160,
+        height: line ? 3 : 140,
+        fill: brand.text,
+        radius: 0,
+      }),
+    );
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (
         target.closest(
           "input, textarea, select, [contenteditable=true], dialog",
-        )
+        ) ||
+        disabled
       )
         return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      const mod = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      if (mod && key === "z") {
         event.preventDefault();
         travel(event.shiftKey ? "redo" : "undo");
+        return;
       }
-      if (event.key === "Escape") {
-        setSelected(null);
+      if (mod && key === "a") {
+        event.preventDefault();
+        setSelected(scene.elements.filter((e) => !e.locked).map((e) => e.id));
+        return;
+      }
+      if (mod && key === "c" && selected.length) {
+        event.preventDefault();
+        copied.current = structuredClone(
+          scene.elements.filter((e) => selected.includes(e.id)),
+        );
+        return;
+      }
+      if (mod && (key === "d" || key === "v")) {
+        const source =
+          key === "d"
+            ? scene.elements.filter((e) => selected.includes(e.id) && !e.locked)
+            : copied.current;
+        if (!source.length) return;
+        event.preventDefault();
+        const copies = source
+          .slice(0, 100 - scene.elements.length)
+          .map((e) => ({
+            ...e,
+            id: crypto.randomUUID(),
+            locked: false,
+            x: Math.min(10000, e.x + 12),
+            y: Math.min(10000, e.y + 12),
+          }));
+        changeScene({ ...scene, elements: [...scene.elements, ...copies] });
+        setSelected(copies.map((e) => e.id));
+        return;
+      }
+      if ((key === "delete" || key === "backspace") && selected.length) {
+        event.preventDefault();
+        changeScene({
+          ...scene,
+          elements: scene.elements.filter(
+            (e) => !selected.includes(e.id) || e.locked,
+          ),
+        });
+        setSelected([]);
+        return;
+      }
+      if (key.startsWith("arrow") && selected.length) {
+        event.preventDefault();
+        const distance = event.shiftKey ? 10 : 1;
+        const dx =
+          key === "arrowleft" ? -distance : key === "arrowright" ? distance : 0;
+        const dy =
+          key === "arrowup" ? -distance : key === "arrowdown" ? distance : 0;
+        changeScene(
+          {
+            ...scene,
+            elements: scene.elements.map((e) =>
+              selected.includes(e.id) && !e.locked
+                ? {
+                    ...e,
+                    x: Math.max(-3600, Math.min(3600, e.x + dx)),
+                    y: Math.max(-3600, Math.min(3600, e.y + dy)),
+                  }
+                : e,
+            ),
+          },
+          "nudge",
+        );
+        return;
+      }
+      if (key === "escape") {
+        setSelected([]);
         setExportMenu(false);
+        return;
+      }
+      if (!mod && !event.altKey && key === "t") {
+        event.preventDefault();
+        addText();
+      }
+      if (!mod && !event.altKey && key === "r") {
+        event.preventDefault();
+        addShape("rectangle");
+      }
+      if (!mod && !event.altKey && key === "o") {
+        event.preventDefault();
+        addShape("ellipse");
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [travel]);
+  });
   useEffect(() => {
     const node = workspaceRef.current;
     if (!node) return;
@@ -229,13 +371,7 @@ export function DesignEditor({
     if (design.pages.length >= 20) return;
     const next = duplicatePage(page);
     if (!duplicate)
-      next.style = {
-        ...next.style,
-        heading: isTemplateDraft ? "" : "Your next idea.",
-        body: isTemplateDraft ? "" : "Add the details that bring it to life.",
-        headingHtml: undefined,
-        bodyHtml: undefined,
-      };
+      next.canvas = { background: scene.background, elements: [] };
     commit((d) => ({
       ...d,
       pages: [
@@ -245,7 +381,7 @@ export function DesignEditor({
       ],
     }));
     setPageId(next.id);
-    setSelected(null);
+    setSelected([]);
   }
   function movePage(from: number, to: number) {
     if (from === to || from < 0 || to < 0 || to >= design.pages.length) return;
@@ -256,10 +392,8 @@ export function DesignEditor({
       return { ...d, pages };
     });
   }
-  async function upload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
+  async function upload(file: File, replaceId?: string) {
+    if (disabled || uploading) return;
     const targetId = page.id;
     setUploading(true);
     try {
@@ -268,186 +402,126 @@ export function DesignEditor({
       if (file.size > 15 * 1024 * 1024)
         throw new Error("Choose an image smaller than 15 MB.");
       const bitmap = await createImageBitmap(file);
-      const scale = Math.min(1, 1800 / Math.max(bitmap.width, bitmap.height));
+      if (!mounted.current) {
+        bitmap.close();
+        return;
+      }
+      const ratio = Math.min(1, 1800 / Math.max(bitmap.width, bitmap.height));
       const canvas = document.createElement("canvas");
-      canvas.width = Math.round(bitmap.width * scale);
-      canvas.height = Math.round(bitmap.height * scale);
+      canvas.width = Math.max(1, Math.round(bitmap.width * ratio));
+      canvas.height = Math.max(1, Math.round(bitmap.height * ratio));
       const context = canvas.getContext("2d");
-      if (!context)
-        throw new Error("Image processing is unavailable in this browser.");
+      if (!context) {
+        bitmap.close();
+        throw new Error("Image processing is unavailable.");
+      }
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
       bitmap.close();
-      const url = canvas.toDataURL("image/webp", 0.88);
-      if (url.length > 2_000_000)
+      const src = canvas.toDataURL("image/webp", 0.88);
+      if (src.length > 2_000_000)
         throw new Error(
           "This image is too large after processing. Use a smaller image.",
         );
+      const targetPage = current.current.pages.find((p) => p.id === targetId);
+      if (!targetPage)
+        throw new Error(
+          "The page was removed. Choose a page and upload again.",
+        );
+      const targetScene =
+        targetPage.canvas ?? sceneForPage(targetPage, current.current.format);
+      if (
+        replaceId &&
+        !targetScene.elements.some(
+          (e) => e.id === replaceId && e.type === "image" && !e.locked,
+        )
+      )
+        throw new Error(
+          "The image was removed or locked. Select an image and try again.",
+        );
+      if (!replaceId && targetScene.elements.length >= 100)
+        throw new Error("Each page supports up to 100 elements.");
+      const w = Math.max(1, Math.min(280, canvas.width / 3)),
+        h = Math.max(
+          1,
+          Math.min(canvasHeight * 0.7, (w * canvas.height) / canvas.width),
+        );
+      const image = createCanvasElement("image", {
+        src,
+        name: file.name.slice(0, 100),
+        x: (360 - w) / 2,
+        y: (canvasHeight - h) / 2,
+        width: w,
+        height: h,
+      });
       commit((d) => ({
         ...d,
-        pages: d.pages.map((p) =>
-          p.id === targetId
-            ? {
-                ...p,
-                image: {
-                  ...p.image,
-                  url,
-                  width: canvas.width,
-                  height: canvas.height,
-                  source: "upload",
-                  description: file.name,
-                  rightsNote: "Uploaded by you",
-                },
-                style: {
-                  ...p.style,
-                  ...(p.style.template === "text"
-                    ? ({ template: "fullbleed", textColor: "#ffffff" } as const)
-                    : {}),
-                  mediaOpacity: 1,
-                  mediaScale: 1,
-                  mediaInX: 0,
-                  mediaInY: 0,
-                },
-              }
-            : p,
-        ),
+        pages: d.pages.map((p) => {
+          if (p.id !== targetId) return p;
+          const live = p.canvas ?? sceneForPage(p, d.format);
+          if (!replaceId && live.elements.length >= 100) return p;
+          return {
+            ...p,
+            canvas: {
+              ...live,
+              elements: replaceId
+                ? live.elements.map((e) =>
+                    e.id === replaceId && e.type === "image"
+                      ? { ...e, src, name: file.name.slice(0, 100) }
+                      : e,
+                  )
+                : [...live.elements, image],
+            },
+          };
+        }),
       }));
-      setNotice("Image added to this page.");
+      if (activePage.current === targetId) setSelected([replaceId ?? image.id]);
+      setNotice(
+        replaceId
+          ? "Image replaced."
+          : "Image added. Drag its handles to resize it.",
+      );
     } catch (reason) {
       setNotice(
         reason instanceof Error ? reason.message : "Could not open this image.",
       );
     } finally {
-      setUploading(false);
+      if (mounted.current) setUploading(false);
     }
   }
   function applyBrand() {
     commit((d) => ({
       ...d,
-      pages: d.pages.map((p) => ({
-        ...p,
-        style: {
-          ...p.style,
-          font: brand.font,
-          bgMode: "color",
-          bgColor: brand.background,
-          textColor: brand.text,
-          headingHtml: undefined,
-          bodyHtml: undefined,
-        },
-      })),
+      pages: d.pages.map((p) => {
+        const content = p.canvas ?? sceneForPage(p, d.format);
+        return {
+          ...p,
+          canvas: {
+            background: brand.background,
+            elements: content.elements.map((e) =>
+              e.type === "text"
+                ? { ...e, font: brand.font, color: brand.text }
+                : e,
+            ),
+          },
+        };
+      }),
     }));
     setNotice(`Applied ${brand.name || "your brand"} to all pages.`);
   }
   const inspector = (
-    <>
-      <div className="te-panel-heading">
-        <h2>Appearance</h2>
-        <span>PAGE {index + 1}</span>
-      </div>
-      <FontSelect
-        value={page.style.font ?? "geist"}
-        onChange={(font) =>
-          patchStyle({ font, headingHtml: undefined, bodyHtml: undefined })
-        }
-      />
-      <Range
-        label="Text size"
-        value={page.style.textScale ?? 1}
-        min={0.5}
-        max={2.5}
-        step={0.05}
-        unit="×"
-        onChange={(textScale) => patchStyle({ textScale }, "textScale")}
-      />
-      <label className="te-field">
-        Text alignment
-        <select
-          value={page.style.textAlign ?? "left"}
-          onChange={(e) =>
-            patchStyle({ textAlign: e.target.value as SlideStyle["textAlign"] })
-          }
-        >
-          <option value="left">Left</option>
-          <option value="center">Center</option>
-          <option value="right">Right</option>
-        </select>
-      </label>
-      <label className="te-field">
-        Text position
-        <select
-          value={page.style.align ?? "center"}
-          onChange={(e) =>
-            patchStyle({
-              align: e.target.value as SlideStyle["align"],
-              textX: 0,
-              textY: 0,
-            })
-          }
-        >
-          <option value="top">Top</option>
-          <option value="center">Center</option>
-          <option value="bottom">Bottom</option>
-        </select>
-      </label>
-      <Range
-        label="Line spacing"
-        value={page.style.lineHeight ?? 1}
-        min={0.7}
-        max={2}
-        step={0.05}
-        unit="×"
-        onChange={(lineHeight) => patchStyle({ lineHeight }, "lineHeight")}
-      />
-      <ColorField
-        label="Text color"
-        value={page.style.textColor ?? "#ffffff"}
-        onChange={(textColor) => patchStyle({ textColor }, "textColor")}
-      />
-      <ColorField
-        label="Background"
-        value={page.style.bgColor ?? "#0c0c0c"}
-        onChange={(bgColor) =>
-          patchStyle({ bgColor, bgMode: "color" }, "bgColor")
-        }
-      />
-      <button className="te-button te-full" onClick={applyBrand}>
-        <StarIcon />
-        Apply brand to all pages
-      </button>
-      <button
-        className="te-button te-full te-mobile-template"
-        onClick={() => setTemplateName(design.name)}
-      >
-        <LayoutIcon />
-        {saveTemplateLabel}
-      </button>
-      <p className="te-help">
-        Double-click text on the canvas to edit it. Drag text or images to
-        reposition them.
-      </p>
-      <button
-        className="te-text-button"
-        onClick={() =>
-          patchStyle({
-            textX: 0,
-            textY: 0,
-            mediaX: 0,
-            mediaY: 0,
-            mediaW: undefined,
-            mediaH: undefined,
-            mediaScale: 1,
-            mediaInX: 0,
-            mediaInY: 0,
-          })
-        }
-      >
-        Reset positions
-      </button>
-    </>
+    <ElementInspector
+      scene={scene}
+      selectedIds={selected}
+      onSelect={setSelected}
+      onChange={changeScene}
+      width={360}
+      height={canvasHeight}
+      disabled={disabled}
+    />
   );
 
   return (
-    <div className="te-editor">
+    <div className="te-editor te-wysiwyg">
       <header className="te-editor-header">
         <button
           className="te-icon"
@@ -590,142 +664,316 @@ export function DesignEditor({
           <nav className="te-tool-tabs" aria-label="Editor tools">
             {(
               [
-                ["templates", LayoutIcon, "Layouts"],
-                ["content", TextIcon, "Content"],
-                ["media", ImageIcon, "Media"],
-                ["style", StarIcon, "Style"],
+                ["templates", LayoutIcon, "Design"],
+                ["text", TextIcon, "Text"],
+                ["elements", PlusIcon, "Elements"],
+                ["media", ImageIcon, "Uploads"],
+                ["layers", CopyIcon, "Layers"],
+                ["caption", TextIcon, "Caption"],
+                ["style", StarIcon, "Properties"],
               ] as const
             ).map(([id, Icon, label]) => (
               <button
                 key={id}
                 className={tab === id ? "is-active" : ""}
                 onClick={() => setTab(id)}
+                aria-pressed={tab === id}
               >
-                <Icon size={18} />
+                <Icon size={20} />
                 <span>{label}</span>
               </button>
             ))}
           </nav>
           <fieldset disabled={disabled} className="te-panel-scroll">
+            {tab === "text" && (
+              <>
+                <div className="te-panel-heading">
+                  <h2>Add text</h2>
+                  <span>T</span>
+                </div>
+                <button
+                  className="te-add-text te-add-heading"
+                  onClick={() => addText(30, "Add a heading")}
+                >
+                  Add a heading
+                </button>
+                <button
+                  className="te-add-text te-add-subheading"
+                  onClick={() => addText(20, "Add a subheading")}
+                >
+                  Add a subheading
+                </button>
+                <button
+                  className="te-add-text"
+                  onClick={() => addText(13, "Add your body text")}
+                >
+                  Add body text
+                </button>
+                <p className="te-help">
+                  Double-click any text on the canvas to type. Select it to
+                  change its font, alignment, case, color, and spacing.
+                </p>
+                <div className="te-panel-heading">
+                  <h2>Your brand</h2>
+                </div>
+                <button className="te-button te-full" onClick={applyBrand}>
+                  <StarIcon /> Apply brand to all pages
+                </button>
+              </>
+            )}
+            {tab === "elements" && (
+              <>
+                <div className="te-panel-heading">
+                  <h2>Shapes & lines</h2>
+                </div>
+                <div className="te-shape-picker">
+                  <button onClick={() => addShape("rectangle")}>
+                    <span className="te-shape-rect" />
+                    Rectangle
+                  </button>
+                  <button onClick={() => addShape("ellipse")}>
+                    <span className="te-shape-circle" />
+                    Circle
+                  </button>
+                  <button onClick={() => addShape("rectangle", true)}>
+                    <span className="te-shape-line" />
+                    Line
+                  </button>
+                </div>
+                <p className="te-help">
+                  Drag, resize, and rotate shapes on the canvas. Use Properties
+                  for fill, borders, and rounded corners.
+                </p>
+                <div className="te-panel-heading">
+                  <h2>Page background</h2>
+                </div>
+                <ColorField
+                  label="Background color"
+                  value={scene.background}
+                  onChange={(background) =>
+                    changeScene({ ...scene, background }, "background")
+                  }
+                />
+                <div className="te-swatches">
+                  {[
+                    "#ffffff",
+                    "#f3efe6",
+                    "#dce5d8",
+                    "#263e35",
+                    "#0c0c0c",
+                    "#a78bfa",
+                    "#ff7547",
+                    "#2767ff",
+                  ].map((color) => (
+                    <button
+                      key={color}
+                      aria-label={`Background ${color}`}
+                      style={{ background: color }}
+                      onClick={() =>
+                        changeScene({ ...scene, background: color })
+                      }
+                    />
+                  ))}
+                </div>
+              </>
+            )}
             {tab === "templates" && (
               <>
                 <div className="te-panel-heading">
-                  <h2>Page layouts</h2>
+                  <h2>Page templates</h2>
                 </div>
                 <p className="te-help">
-                  Change the layout of this page. Your words and image stay with
-                  it.
+                  Apply a template to this page, then edit every element. Undo
+                  restores the previous page.
                 </p>
-                <div className="te-layout-grid">
-                  {TEMPLATES.map((t) => (
-                    <button
-                      key={t.id}
-                      className={
-                        page.style.template === t.id ? "is-active" : ""
-                      }
-                      onClick={() =>
-                        patchStyle({ template: t.id, textX: 0, textY: 0 })
-                      }
-                    >
-                      <SlideThumb template={t.id} />
-                      <span>{t.label}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="te-panel-heading">
-                  <h2>Template styles</h2>
-                </div>
-                <div className="te-style-presets">
+                <div className="te-canvas-templates">
                   {templates.map((t) => (
                     <button
                       key={t.id}
-                      onClick={() =>
-                        patchStyle({
-                          ...t.pages[0].style,
-                          heading: page.style.heading,
-                          body: page.style.body,
-                          headingHtml: page.style.headingHtml,
-                          bodyHtml: page.style.bodyHtml,
-                        })
-                      }
+                      onClick={() => {
+                        const next = duplicatePage(t.pages[0]);
+                        changeScene(
+                          resizeCanvasScene(
+                            sceneForPage(next, t.format),
+                            t.format,
+                            design.format,
+                          ),
+                        );
+                        setSelected([]);
+                      }}
                     >
-                      <span
-                        style={{
-                          background: t.pages[0].style.bgColor ?? "#242424",
-                          color: t.pages[0].style.textColor ?? "#fff",
-                        }}
-                      >
-                        Aa
-                      </span>
-                      <span>
-                        {t.name}
-                        <small>{t.category}</small>
-                      </span>
-                      <ArrowRightIcon size={14} />
+                      <DesignPreview
+                        design={{ ...design, format: t.format, pages: t.pages }}
+                        page={t.pages[0]}
+                      />
+                      <span>{t.name}</span>
                     </button>
                   ))}
                 </div>
               </>
             )}
-            {tab === "content" && (
+            {tab === "media" && (
               <>
                 <div className="te-panel-heading">
-                  <h2>
-                    {isTemplateDraft ? "Build your template" : "Make it yours"}
-                  </h2>
-                  <span>PAGE {index + 1}</span>
+                  <h2>Images</h2>
                 </div>
-                {isTemplateDraft && (
+                <button
+                  className="te-upload"
+                  disabled={uploading || scene.elements.length >= 100}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <ImageIcon size={26} />
+                  <strong>
+                    {uploading ? "Preparing image…" : "Upload an image"}
+                  </strong>
+                  <span>JPG, PNG or WebP · up to 15 MB</span>
+                </button>
+                <input
+                  ref={fileRef}
+                  hidden
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) void upload(file);
+                  }}
+                />
+                {selected.length === 1 &&
+                  scene.elements.find((e) => e.id === selected[0])?.type ===
+                    "image" && (
+                    <label className="te-button te-full te-replace-image">
+                      Replace selected image
+                      <input
+                        type="file"
+                        hidden
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = "";
+                          if (file) void upload(file, selected[0]);
+                        }}
+                      />
+                    </label>
+                  )}
+                <p className="te-help">
+                  Drop or paste an image onto the workspace. Add as many images
+                  as your page needs.
+                </p>
+                <div className="te-panel-heading">
+                  <h2>Studio artwork</h2>
+                </div>
+                <div className="te-artwork-grid">
+                  {[
+                    "forest",
+                    "dunes",
+                    "coral",
+                    "folds",
+                    "orbits",
+                    "sculpture",
+                  ].map((name) => (
+                    <button
+                      key={name}
+                      aria-label={`Add ${name} artwork`}
+                      onClick={() =>
+                        addElement(
+                          createCanvasElement("image", {
+                            name: `${name} artwork`,
+                            src: `/template-editor/${name}.svg`,
+                            x: 40,
+                            y: canvasHeight / 2 - 140,
+                            width: 280,
+                            height: 280,
+                          }),
+                        )
+                      }
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={`/template-editor/${name}.svg`} alt={name} />
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            {tab === "layers" && (
+              <>
+                <div className="te-panel-heading">
+                  <h2>Layers</h2>
+                  <span>{scene.elements.length}/100</span>
+                </div>
+                <p className="te-help">
+                  Top layers appear in front. Shift-click to select several
+                  elements.
+                </p>
+                <div className="te-layers">
+                  {[...scene.elements].reverse().map((e) => (
+                    <div
+                      key={e.id}
+                      className={selected.includes(e.id) ? "is-active" : ""}
+                    >
+                      <button
+                        className="te-layer-name"
+                        aria-label={`Select layer ${e.name}`}
+                        onClick={(event) =>
+                          setSelected(
+                            event.shiftKey
+                              ? selected.includes(e.id)
+                                ? selected.filter((id) => id !== e.id)
+                                : [...selected, e.id]
+                              : [e.id],
+                          )
+                        }
+                      >
+                        <span>
+                          {e.type === "text"
+                            ? "T"
+                            : e.type === "image"
+                              ? "▧"
+                              : "□"}
+                        </span>
+                        <span>
+                          {e.type === "text"
+                            ? e.text.slice(0, 40) || "Empty text"
+                            : e.name}
+                        </span>
+                      </button>
+                      <button
+                        className="te-icon"
+                        title={e.locked ? "Unlock layer" : "Lock layer"}
+                        aria-label={`${e.locked ? "Unlock" : "Lock"} ${e.name}`}
+                        onClick={() =>
+                          changeScene({
+                            ...scene,
+                            elements: scene.elements.map((layer) =>
+                              layer.id === e.id
+                                ? { ...layer, locked: !layer.locked }
+                                : layer,
+                            ),
+                          })
+                        }
+                      >
+                        {e.locked ? "▣" : "◇"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {!scene.elements.length && (
                   <p className="te-help">
-                    Add text below, choose a layout, or upload an image. Add
-                    pages to build the full template. Your draft autosaves as
-                    you work.
+                    Your canvas is empty. Add text, shapes, or an image to get
+                    started.
                   </p>
                 )}
-                {page.style.template === "plain" ? (
-                  <p className="te-help">
-                    This is a photo-only layout. Choose a different layout to
-                    show your text.
-                  </p>
-                ) : null}
-                <label className="te-field">
-                  Heading
-                  <textarea
-                    rows={4}
-                    maxLength={500}
-                    value={page.style.heading ?? ""}
-                    onChange={(e) =>
-                      patchStyle(
-                        { heading: e.target.value, headingHtml: undefined },
-                        "heading",
-                      )
-                    }
-                    placeholder="Your main idea…"
-                  />
-                </label>
-                <label className="te-field">
-                  Body
-                  <textarea
-                    rows={6}
-                    maxLength={2000}
-                    value={page.style.body ?? ""}
-                    onChange={(e) =>
-                      patchStyle(
-                        { body: e.target.value, bodyHtml: undefined },
-                        "body",
-                      )
-                    }
-                    placeholder="Bring your idea to life…"
-                  />
-                </label>
+              </>
+            )}
+            {tab === "caption" && (
+              <>
                 <div className="te-panel-heading">
                   <h2>Post caption</h2>
-                  <span>ALL PAGES</span>
                 </div>
                 <label className="te-field">
-                  <span className="te-sr-only">Post caption</span>
+                  Caption
                   <textarea
-                    rows={5}
+                    rows={10}
                     maxLength={2200}
                     placeholder="Write a caption for your post…"
                     value={design.caption}
@@ -743,117 +991,34 @@ export function DesignEditor({
                 </label>
               </>
             )}
-            {tab === "media" && (
-              <>
-                <div className="te-panel-heading">
-                  <h2>Your imagery</h2>
-                </div>
-                <button
-                  className="te-upload"
-                  disabled={uploading}
-                  onClick={() => fileRef.current?.click()}
-                >
-                  <ImageIcon size={28} />
-                  <strong>
-                    {uploading ? "Preparing image…" : "Upload an image"}
-                  </strong>
-                  <span>JPG, PNG or WebP · up to 15 MB</span>
-                </button>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  hidden
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={upload}
-                />
-                <p className="te-help">
-                  Replaces the image on this page. Uploaded images are saved
-                  with your design.
-                </p>
-                <Range
-                  label="Image zoom"
-                  value={page.style.mediaScale ?? 1}
-                  min={1}
-                  max={3}
-                  step={0.05}
-                  unit="×"
-                  onChange={(mediaScale) =>
-                    patchStyle({ mediaScale }, "mediaScale")
-                  }
-                />
-                <Range
-                  label="Horizontal crop"
-                  value={page.style.mediaInX ?? 0}
-                  min={-50}
-                  max={50}
-                  onChange={(mediaInX) => patchStyle({ mediaInX }, "mediaInX")}
-                />
-                <Range
-                  label="Vertical crop"
-                  value={page.style.mediaInY ?? 0}
-                  min={-50}
-                  max={50}
-                  onChange={(mediaInY) => patchStyle({ mediaInY }, "mediaInY")}
-                />
-                <Range
-                  label="Image opacity"
-                  value={Math.round((page.style.mediaOpacity ?? 1) * 100)}
-                  min={0}
-                  max={100}
-                  unit="%"
-                  onChange={(value) =>
-                    patchStyle({ mediaOpacity: value / 100 }, "mediaOpacity")
-                  }
-                />
-                <div className="te-panel-heading">
-                  <h2>Images in this design</h2>
-                </div>
-                <div className="te-media-grid">
-                  {design.pages.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() =>
-                        commit((d) => ({
-                          ...d,
-                          pages: d.pages.map((target) =>
-                            target.id === page.id
-                              ? {
-                                  ...target,
-                                  image: { ...p.image, id: target.image.id },
-                                }
-                              : target,
-                          ),
-                        }))
-                      }
-                      aria-label={`Use image from page ${design.pages.indexOf(p) + 1}`}
-                    >
-                      <DesignPreview
-                        design={{
-                          ...design,
-                          pages: [{ ...p, style: { template: "plain" } }],
-                        }}
-                        page={{ ...p, style: { template: "plain" } }}
-                      />
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
             {tab === "style" && inspector}
+            <button
+              className="te-shortcuts-link"
+              onClick={() => setShowShortcuts(true)}
+            >
+              Keyboard shortcuts <span>⌘</span>
+            </button>
           </fieldset>
         </aside>
         <main className="te-canvas-column">
           <div className="te-canvas-toolbar">
             <label>
-              Format
+              Resize
               <select
                 aria-label="Design format"
                 disabled={disabled}
                 value={design.format}
                 onChange={(e) => {
+                  const nextFormat = e.target.value as DesignFormat;
                   commit((d) => ({
                     ...d,
-                    format: e.target.value as DesignFormat,
+                    format: nextFormat,
+                    pages: d.pages.map((p) => ({
+                      ...p,
+                      canvas: p.canvas
+                        ? resizeCanvasScene(p.canvas, d.format, nextFormat)
+                        : undefined,
+                    })),
                   }));
                   setZoom(1);
                 }}
@@ -865,32 +1030,92 @@ export function DesignEditor({
                 ))}
               </select>
             </label>
-            <span>
-              {index + 1} / {design.pages.length}
+            <span className="te-selection-hint">
+              {selected.length
+                ? `${selected.length} selected · Shift-click for more`
+                : "Click to select · Double-click to edit"}
             </span>
-          </div>
-          <div className="te-canvas-space" ref={workspaceRef}>
-            <div
-              className="te-canvas-stage"
-              style={{ width: FRAME_WIDTH * Math.max(0.15, fit) * zoom }}
+            <button
+              className="te-text-button te-properties-trigger"
+              onClick={() => setTab("style")}
             >
-              <DesignPreview
-                design={design}
-                page={page}
-                selected={selected}
-                onSet={disabled ? undefined : (patch) => patchStyle(patch)}
-                onSelect={(element) => {
-                  setSelected(element);
-                  if (element === "text") setTab("content");
-                  if (element === "media") setTab("media");
+              Properties
+            </button>
+          </div>
+          <div
+            className="te-canvas-space"
+            ref={workspaceRef}
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              const file = e.dataTransfer.files[0];
+              if (file) {
+                e.preventDefault();
+                void upload(file);
+              }
+            }}
+            onPaste={(e) => {
+              const file = Array.from(e.clipboardData.files).find((f) =>
+                f.type.startsWith("image/"),
+              );
+              if (
+                file &&
+                !(e.target as HTMLElement).closest("[contenteditable=true]")
+              ) {
+                e.preventDefault();
+                void upload(file);
+              }
+            }}
+          >
+            <div
+              className="te-canvas-stage te-free-stage"
+              style={{
+                width: FRAME_WIDTH * scale,
+                height: canvasHeight * scale,
+              }}
+            >
+              <div
+                style={{
+                  width: FRAME_WIDTH,
+                  height: canvasHeight,
+                  transform: `scale(${scale})`,
+                  transformOrigin: "top left",
                 }}
-              />
+              >
+                {page.canvas ? (
+                  <CanvasEditor
+                    key={page.id}
+                    scene={scene}
+                    width={FRAME_WIDTH}
+                    height={canvasHeight}
+                    selectedIds={selected}
+                    onSelect={setSelected}
+                    onChange={changeScene}
+                    disabled={disabled}
+                  />
+                ) : (
+                  <div className="te-legacy-canvas">
+                    <DesignFrame design={design} page={page} />
+                    <button
+                      className="te-button te-primary"
+                      disabled={disabled}
+                      onClick={() => changeScene(scene)}
+                    >
+                      Edit individual elements
+                    </button>
+                    <span>
+                      Convert this older layout to editable layers. Undo
+                      restores it.
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           <div className="te-canvas-bottom">
             <span>
-              Page {index + 1} ·{" "}
-              {TEMPLATES.find((t) => t.id === page.style.template)?.label}
+              Page {index + 1} · {scene.elements.length} elements
             </span>
             <div>
               <button
@@ -984,7 +1209,7 @@ export function DesignEditor({
                   className={`te-page-thumb ${p.id === page.id ? "is-active" : ""}`}
                   onClick={() => {
                     setPageId(p.id);
-                    setSelected(null);
+                    setSelected([]);
                   }}
                   aria-label={`Page ${i + 1}`}
                   aria-pressed={p.id === page.id}
@@ -1008,6 +1233,34 @@ export function DesignEditor({
           <fieldset disabled={disabled}>{inspector}</fieldset>
         </aside>
       </div>
+      {showShortcuts && (
+        <Modal
+          title="Keyboard shortcuts"
+          onClose={() => setShowShortcuts(false)}
+        >
+          <div className="te-shortcuts-list">
+            {[
+              ["T", "Add text"],
+              ["R / O", "Rectangle / circle"],
+              ["⌘/Ctrl Z", "Undo"],
+              ["⌘/Ctrl Shift Z", "Redo"],
+              ["⌘/Ctrl D", "Duplicate selected"],
+              ["⌘/Ctrl C / V", "Copy / paste elements"],
+              ["⌘/Ctrl A", "Select all unlocked elements"],
+              ["Arrow keys", "Move selected elements"],
+              ["Shift + arrows", "Move in larger steps"],
+              ["Delete", "Remove selected elements"],
+              ["Shift + click", "Select multiple elements"],
+              ["Escape", "Deselect / cancel gesture"],
+            ].map(([key, action]) => (
+              <div key={key}>
+                <span>{action}</span>
+                <kbd>{key}</kbd>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
       {templateName !== null && (
         <Modal
           title={

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CloseIcon } from "@/components/grateful-future/icons";
 
 export const FONTS = [
@@ -47,6 +47,8 @@ export function ColorField({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState(value);
   return (
     <label className="te-color-field">
       <span>{label}</span>
@@ -57,7 +59,23 @@ export function ColorField({
           value={/^#[0-9a-f]{6}$/i.test(value) ? value : "#ffffff"}
           onChange={(e) => onChange(e.target.value)}
         />
-        <code>{value.toUpperCase()}</code>
+        <input
+          className="te-color-hex"
+          aria-label={`${label} hex`}
+          value={typing ? draft : value.toUpperCase()}
+          maxLength={9}
+          onFocus={() => {
+            setDraft(value.toUpperCase());
+            setTyping(true);
+          }}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            if (/^#[0-9a-f]{6}$/i.test(e.target.value))
+              onChange(e.target.value);
+          }}
+          onBlur={() => setTyping(false)}
+          spellCheck={false}
+        />
       </span>
     </label>
   );
